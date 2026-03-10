@@ -12,8 +12,29 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 from langchain_groq import ChatGroq
+import tempfile
+import json
+
+@st.cache_resource
+def get_bigquery_db():
+    # 1. Handle Cloud Deployment
+    if "gcp_service_account" in st.secrets:
+        # Create a temporary file to hold the secrets safely
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
+            json.dump(dict(st.secrets["gcp_service_account"]), f)
+            temp_path = f.name
+        
+        # Connect using the temporary file path
+        db_uri = f"bigquery://bi-project-489517/austin_bikeshare?credentials_path={temp_path}"
+    
+    # 2. Handle Local Development
+    else:
+        db_uri = "bigquery://bi-project-489517/austin_bikeshare"
+        
+    return SQLDatabase.from_uri(db_uri)
 
 load_dotenv()
+creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 api_key = os.getenv("MY_API_KEY")
 # --- 1. Define Agent State (The "Memory" of the Graph) ---
 class AgentState(TypedDict):
@@ -42,7 +63,7 @@ def should_continue(state: AgentState):
 
 # --- 2. Database Connection & Semantic Layer ---
 # Initialize BigQuery connection (read-only service account recommended)
-db = SQLDatabase.from_uri("bigquery://bi-project-489517/austin_bikeshare")
+db = get_bigquery_db()
 # llm = ChatOllama(model="llama3", temperature=0)
 # llm = ChatGoogleGenerativeAI(
 #     model="gemini-2.5-flash", temperature=0)

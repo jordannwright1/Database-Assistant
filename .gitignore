@@ -4,6 +4,7 @@
 # Cloud SDKs & Tools
 *install_google_cloud*
 .google-cloud-sdk/
+*.json
 
 # Python
 __pycache__/
