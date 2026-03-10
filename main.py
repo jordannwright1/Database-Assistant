@@ -1,6 +1,6 @@
 import streamlit as st
 import uuid
-from agent import app  
+from agent import get_bigquery_db  
 
 # --- 1. Page Configuration ---
 st.set_page_config(page_title="Austin Bikeshare Dataset AI Assistant", page_icon="📊", layout="wide")
@@ -64,7 +64,7 @@ if prompt := st.chat_input("Ex: How does the average trip duration for 'Annual M
         generated_sql = ""
 
         with st.spinner("Analyzing..."):
-            for output in app.stream(inputs, config=config):
+            for output in get_bigquery_db.stream(inputs, config=config):
                 for node_name, state_update in output.items():
                     if node_name == "plan":
                         status_placeholder.markdown("🧠 *Brainstorming query plan...*")
