@@ -36,7 +36,7 @@ def get_bigquery_db():
 
 load_dotenv()
 creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-api_key = os.getenv("MY_API_KEY")
+api_key = os.getenv("GROQ_API_KEY")
 # --- 1. Define Agent State (The "Memory" of the Graph) ---
 class AgentState(TypedDict):
     question: str
