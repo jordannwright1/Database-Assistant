@@ -1,6 +1,12 @@
 import streamlit as st
 import uuid
-from agent import get_bigquery_db  
+from agent import get_bigquery_db 
+import os 
+from groq import Groq
+# Bridge secrets to environment variables
+if "GROQ_API_KEY" in st.secrets:
+    os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
+client = Groq()
 
 # --- 1. Page Configuration ---
 st.set_page_config(page_title="Austin Bikeshare Dataset AI Assistant", page_icon="📊", layout="wide")
