@@ -18,6 +18,7 @@ import json
 @st.cache_resource
 def get_bigquery_db():
     # 1. Handle Cloud Deployment
+    print(f"DEBUG: Secrets keys found: {list(st.secrets.keys())}")
     if "gcp_service_account" in st.secrets:
         # Create a temporary file to hold the secrets safely
         with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
