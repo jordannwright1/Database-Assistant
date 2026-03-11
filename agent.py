@@ -47,18 +47,19 @@ class AgentState(TypedDict):
     attempt: int 
 
 def should_continue(state: AgentState):
-    # 1. If we have a hard error, try to fix it
+    db_result = state.get("db_result", "No results found.")
+    if db_result == "ERROR" or "Data parsing failed" in db_result:
+        return {"final_answer": f"I hit a technical snag while retrieving the data: {state.get('error')}"}
+    # 1. If we have a hard error
     if state.get("error"):
-        if state.get("attempt", 0) >= 2:
-            return "respond" # Give up and tell user why
-        return "generate_sql"
+        # Check attempt count: only retry if attempt is less than 1
+        current_attempt = state.get("attempt", 0)
+        if current_attempt < 1:
+            return "generate_sql" # Retry once
+        else:
+            return "respond" # Give up and report the error
     
-    # 2. If the result is empty/null, it's a data failure
-    if not state.get("db_result") or state.get("db_result").strip() in ["", "[]", "None"]:
-        # Optional: Increment attempt and retry or report to user
-        return "respond" 
-        
-    # 3. Success path
+    # 2. Success path
     return "respond"
 
 # --- 2. Database Connection & Semantic Layer ---
@@ -129,11 +130,10 @@ SQL_GENERATOR_PROMPT = PromptTemplate.from_template("""
 You are a Senior BigQuery Architect. Write high-performance, single-pass SQL.
 
 ### MANDATORY DATA STRUCTURE
-Every query MUST return a clear table with these rules:
-1. IDENTIFIER: The first column must always be the grouping variable (e.g., `subscriber_type` or `day_of_week`).
-2. DIRECT AGGREGATION: Use `AVG(CASE WHEN...)` or `COUNTIF(...)` directly in the SELECT.
-3. NO CTEs: Write the query as one block: `SELECT... FROM... WHERE... GROUP BY...`.
-4. NO TRUNCATION: Complete the entire query. Do not stop mid-sentence.
+1. LABELS AS DATA: Never use `CASE WHEN` to pivot columns for different subscriber types. Instead, ALWAYS return the grouping variable (e.g., `subscriber_type`) as the first column.
+2. GROUP BY: Use `GROUP BY 1` to ensure every row in the result table is clearly labeled.
+3. NO CTEs: Write the query as a single block.
+4. ROW LIMIT: Always end with `LIMIT 20`.
 
 ### CALCULATION FORMULAS
 - Duration: `AVG(duration_minutes) AS avg_duration`
@@ -142,9 +142,18 @@ Every query MUST return a clear table with these rules:
 
 ### SQL CONSTRAINTS
 - Table: `bi-project-489517.austin_bikeshare.fact_trips`
-- Date: `trip_date >= DATE_SUB((SELECT MAX(trip_date) FROM ...), INTERVAL 30 DAY)`
+- Date: `trip_date >= DATE_SUB((SELECT MAX(trip_date) FROM bi-project-489517.austin_bikeshare.fact_trips), INTERVAL 30 DAY)`
+
+### ERROR CORRECTION
+If the previous attempt failed, the error was: {error_context}
+Adjust your syntax to fix this specific error.
+
+### SCHEMA INFO
+{schema}
 
 Question: {question}
+Plan: {plan}
+
 Generate only the SQL in a ```sql ... ``` block.
 """)
 
@@ -163,7 +172,7 @@ import re
 
 def generate_sql(state: AgentState):
     error = state.get("error", "None")
-    
+    current_attempt = state.get("attempt", 0) + 1
     # Fill the template
     formatted_prompt = SQL_GENERATOR_PROMPT.format(
         question=state['question'],
@@ -173,50 +182,67 @@ def generate_sql(state: AgentState):
     )
     
     # Invoke
-    response = llm_smart.invoke(formatted_prompt).content
+    response = llm.invoke(formatted_prompt).content
     
     # Extract SQL
     match = re.search(r"```sql\n(.*?)\n```", response, re.DOTALL)
     sql_query = match.group(1).strip() if match else response.strip()
     
-    return {"sql_query": sql_query, "error": None}
+    return {"sql_query": sql_query, "error": None, "attempt": current_attempt}
 
 
+import ast
+import re
 from tabulate import tabulate
-
 
 def validate_and_execute_sql(state: AgentState):
     sql_query = state.get("sql_query", "")
+    print(f"--- EXECUTING SQL ---")
+    
     try:
-        raw_result = db.run(sql_query)
-        import ast
-        results = ast.literal_eval(raw_result) if isinstance(raw_result, str) else raw_result
+        raw_result = db.run(sql_query, fetch="all")
         
-        if not results:
+        # 1. Handle if the DB returns a string instead of a list
+        if isinstance(raw_result, str):
+            try:
+                # ast.literal_eval safely converts the string to a real list/tuple object
+                raw_result = ast.literal_eval(raw_result)
+            except:
+                # If it's not a list, return as-is
+                return {"db_result": raw_result, "error": None}
+        
+        if not raw_result:
             return {"db_result": "No data found", "error": None}
 
-        # Find the VERY LAST Select block to get the final aliases
-        final_select_part = sql_query.split('FROM')[-2].split('SELECT')[-1]
-        headers = [h.split(' AS ')[-1].strip().replace('`', '').split('.')[-1] 
-                   for h in final_select_part.split(',')]
-
-        formatted_result = tabulate(results, headers=headers, tablefmt="pipe")
+        # 2. Extract headers from SQL
+        header_match = re.findall(r"AS\s+[`'\" ]*([a-zA-Z0-9_]+)[`'\" ]*", sql_query, re.IGNORECASE)
         
-        return {"db_result": formatted_result, "error": None}
+        # 3. Create a clean Markdown table (Limit to first 10 rows to save tokens!)
+        formatted_table = tabulate(raw_result[:10], headers=header_match, tablefmt="pipe")
+        
+        return {"db_result": formatted_table, "error": None}
+
     except Exception as e:
         return {"db_result": "ERROR", "error": str(e)}
-    
+        
+
 def respond_to_user(state: AgentState):
     db_result = state.get("db_result", "No results found.")
+    error_context = state.get("error", "")
     
-    # Automatically extract headers if result is in list/table format
-    header_hint = "Columns found in result: " + (db_result.split('\n')[0] if '\n' in db_result else "Unknown")
-    if not db_result or db_result == "ERROR":
-        return {"response": "I encountered an error retrieving data. Please check the query logs."}
+    # 1. CRITICAL ERROR HANDLING: 
+    # If the execution node flagged an error, stop here and report it.
+    if db_result == "ERROR" or (error_context and "failed" in error_context.lower()):
+        error_message = f"I encountered a technical error while retrieving the data: {error_context}"
+        return {"final_answer": error_message}
+
+    # 2. NO DATA HANDLING:
+    if db_result == "No data found" or not db_result:
+        return {"final_answer": "The query executed successfully, but no records matched your request in the Austin Bikeshare dataset."}
+
+    # 3. PROMPT PREPARATION (Keep your exact prompt structure)
     prompt = f"""
     You are a data reporter. You are provided with the final, filtered result of a SQL query, which you will report to the user.
-    
-    {header_hint}
     
     DATABASE RESULT:
     {db_result}
@@ -235,10 +261,18 @@ def respond_to_user(state: AgentState):
     Question: {state['question']}
     
     Answer:"""
-    print(f"DEBUG DATA: {state['db_result']}")
-    response = llm.invoke(prompt).content
-    return {"final_answer": response}
 
+    # 4. EXECUTION
+    print(f"DEBUG DATA: {db_result}")
+    
+    try:
+        # Use your standard llm invocation
+        response = llm.invoke(prompt).content
+        return {"final_answer": response}
+    except Exception as e:
+        print(f"--- RESPONSE NODE ERROR: {str(e)} ---")
+        return {"final_answer": f"I analyzed the data, but I'm having trouble formatting the response right now. Raw Result: {db_result}"}
+    
 
 def decide_next_step(state: AgentState):
     if state["clarification_needed"]:

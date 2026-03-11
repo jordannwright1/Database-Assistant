@@ -53,7 +53,7 @@ for message in st.session_state.messages:
             st.code(message["sql"], language="sql")
 
 # --- 5. User Input & Agent Logic ---
-if prompt := st.chat_input("Ex: How does the average trip duration for 'Annual Membership' subscribers compare to 'Pay-as-you-ride' users during morning rush hour (7 AM to 9 AM) versus mid-day (11 AM to 3 PM)?"):
+if prompt := st.chat_input("Ex: Compare the average trip duration of 'Student Membership' users to 'Local365' users for the most recent month in the dataset. Additionally, for each of these two groups, calculate the percentage of their total trips that started during the morning rush hour (7 AM - 9 AM) on weekdays versus all other times."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -66,21 +66,43 @@ if prompt := st.chat_input("Ex: How does the average trip duration for 'Annual M
         inputs = {"question": prompt, "attempt": 0}
         config = {"configurable": {"thread_id": st.session_state.thread_id}}
 
-        final_response = ""
+        final_response = "I encountered an error. Please check the logs."
         generated_sql = ""
 
-        with st.spinner("Analyzing..."):
-            for output in app.stream(inputs, config=config):
-                for node_name, state_update in output.items():
-                    if node_name == "plan":
-                        status_placeholder.markdown("🧠 *Brainstorming query plan...*")
-                    elif node_name == "generate_sql":
-                        generated_sql = state_update.get("sql_query", "")
-                        sql_placeholder.markdown("**Generated SQL:**")
-                        sql_placeholder.code(generated_sql, language="sql")
-                    elif node_name == "respond":
-                        final_response = state_update.get("final_answer", "")
-                        response_placeholder.markdown(final_response)
+        try:
+            with st.spinner("Analyzing..."):
+                # Use .stream() and safely handle updates
+                for output in app.stream(inputs, config=config):
+                    # Check if output is a dict and has content
+                    if output and isinstance(output, dict):
+                        for node_name, state_update in output.items():
+                            # Defensive check: ensure state_update is a dictionary
+                            if not isinstance(state_update, dict):
+                                continue
+                                
+                            if node_name == "plan":
+                                status_placeholder.markdown("🧠 *Brainstorming query plan...*")
+                            elif node_name == "generate_sql":
+                                generated_sql = state_update.get("sql_query", "")
+                                if generated_sql:
+                                    sql_placeholder.markdown("**Generated SQL:**")
+                                    sql_placeholder.code(generated_sql, language="sql")
+                            elif node_name == "respond":
+                                final_response = state_update.get("final_answer", final_response)
+                                response_placeholder.markdown(final_response)
+            
+            status_placeholder.success("✅ Analysis Complete")
+            
+            # Save to history 
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": final_response, 
+                "sql": generated_sql
+            })
+
+        except Exception as e:
+            st.error(f"Agent execution failed: {str(e)}")
+            print(f"CRITICAL ERROR: {str(e)}")
         
         status_placeholder.success("✅ Analysis Complete")
         
