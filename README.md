@@ -1,4 +1,5 @@
 # DataAgent: Autonomous SQL Execution for BigQuery
+[Click Here To Test The Agent](https://database-assistant-3brgrkrmo3vkpwtsqfr87r.streamlit.app)
 
 DataAgent is an autonomous SQL generation and execution system that bridges the gap between natural language and structured BigQuery data. Designed for extreme efficiency, the system leverages a compact, high-performance LLM architecture to translate user queries into valid SQL, execute them, and interpret the results with high analytical accuracy.
 
