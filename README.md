@@ -4,6 +4,17 @@
 DataAgent is an autonomous SQL generation and execution system that bridges the gap between natural language and structured BigQuery data. Designed for extreme efficiency, the system leverages a compact, high-performance LLM architecture to translate user queries into valid SQL, execute them, and interpret the results with high analytical accuracy.
 
 
+## Agent Architecture & Data Pipeline
+
+The DataAgent is built on a modular state-machine architecture, ensuring that each step of the query process is isolated, testable, and robust.
+
+### The Pipeline Workflow
+1.  **Planning Node:** Before any code is written, the agent analyzes the user's intent, identifies necessary data points, and outlines the logical steps (or joins) required to extract the answer.
+2.  **Generation Node:** Translates the approved plan into optimized BigQuery SQL using `Llama-3.1-8B-Instant`.
+3.  **Execution Node:** Safely runs the generated SQL against the `fact_trips` table, with built-in error catching to handle invalid syntax.
+4.  **Normalization Node:** Converts raw database tuples into structured, human-readable format.
+5.  **Reporting Node:** Synthesizes the normalized data into clear business insights, ensuring no hallucinations by grounding the LLM strictly within the provided table context.
+
 
 ## Technical Challenges & Solutions
 
