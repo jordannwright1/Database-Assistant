@@ -18,7 +18,6 @@ import json
 @st.cache_resource
 def get_bigquery_db():
     # 1. Handle Cloud Deployment
-    print(f"DEBUG: Secrets keys found: {list(st.secrets.keys())}")
     if "gcp_service_account" in st.secrets:
         # Create a temporary file to hold the secrets safely
         with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
@@ -70,9 +69,14 @@ db = get_bigquery_db()
 #     model="gemini-2.5-flash", temperature=0)
 
 llm = ChatGroq(
+    model="llama-3.1-8b-instant",
+    temperature=0,
+    api_key=api_key
+)
+llm_smart = ChatGroq(
     model="llama-3.3-70b-versatile",
     temperature=0,
-    api_key=os.getenv("MY_API_KEY") 
+    api_key=api_key 
 )
 
 # --- 3. Prompts ---
@@ -122,46 +126,28 @@ Your response should be 'PLAN: [Your detailed plan]'.
 
 SQL_GENERATOR_PROMPT = PromptTemplate.from_template("""
 ### ROLE
-You are a precise Data Analyst. You write SQL for BigQuery.
-User question: {question}
-Plan: {plan}
-Database Schema: {schema}
-Error Context: {error_context}
+You are a Senior BigQuery Architect. Write high-performance, single-pass SQL.
 
-### CORE CALCULATION POLICY (PRIORITY 1)
-1. NO ESTIMATION: Never guess, simulate, or provide hypothetical numbers. 
-2. SQL-ONLY MATH: All calculations ("average", "ranking", "above/below average") MUST be performed in SQL.  Engineer your own features when necessary to answer the question, such as for calculating average trips per station.
-3. FORCED CTE STRUCTURE: For any question involving averages, comparisons, or thresholds:
-   a) YOU MUST use WITH clauses (CTEs) to perform the math.
-   b) CTE 1: Calculate the base metric per entity (e.g., trips per station).
-   c) CTE 2: Calculate the global average or threshold from CTE 1.
-   d) FINAL SELECT: Filter or join the entity metrics against the global average.
+### MANDATORY DATA STRUCTURE
+Every query MUST return a clear table with these rules:
+1. IDENTIFIER: The first column must always be the grouping variable (e.g., `subscriber_type` or `day_of_week`).
+2. DIRECT AGGREGATION: Use `AVG(CASE WHEN...)` or `COUNTIF(...)` directly in the SELECT.
+3. NO CTEs: Write the query as one block: `SELECT... FROM... WHERE... GROUP BY...`.
+4. NO TRUNCATION: Complete the entire query. Do not stop mid-sentence.
 
-### SQL RULES (PRIORITY 2)
-1. RESERVED KEYWORDS: If a column or alias is a reserved keyword (like 'AT'), wrap it in backticks: `AT`.
-2. GROUPING: Always group by ID. Use ANY_VALUE(name_column) for descriptive names in SELECT.
-3. SOURCE: Prefer vw_trips_detailed unless specific joins are required.
-4. NO DML: Never use INSERT, DELETE, DROP, or ALTER.
+### CALCULATION FORMULAS
+- Duration: `AVG(duration_minutes) AS avg_duration`
+- Percentage: `(COUNTIF(condition) * 100.0 / COUNT(*)) AS metric_pct`
+- Comparison: `(AVG(CASE WHEN A) - AVG(CASE WHEN B)) AS discrepancy`
 
-### SCHEMA LOCK
-- fact_trips: trip_id, start_station_id, end_station_id, subscriber_id, duration_minutes, start_hour, trip_date.
-- dim_stations: station_id, station_name.
-- dim_subscribers: subscriber_id, subscriber_category.
-- ALWAYS JOIN dim_stations ON start_station_id = station_id.
-- ALWAYS JOIN dim_subscribers ON subscriber_id = subscriber_id.
+### SQL CONSTRAINTS
+- Table: `bi-project-489517.austin_bikeshare.fact_trips`
+- Date: `trip_date >= DATE_SUB((SELECT MAX(trip_date) FROM ...), INTERVAL 30 DAY)`
 
----
-Generate only the final SQL query in a ```sql ... ``` block.
-Generated SQL:
+Question: {question}
+Generate only the SQL in a ```sql ... ``` block.
 """)
 
-# Response generator remains largely the same but simplified
-RESPONSE_GENERATOR_PROMPT = PromptTemplate.from_template("""
-User question: {question}
-Result: {db_result}
-
-Provide a clear, professional answer. If the result is empty, inform the user that no data matches their criteria.  If the user asks an analytical question, do NOT provide a textual explanation or hypothetical calculation.  Only use the information you find from querying the database when formulating your response.  When listing, use a bullet point format.  Return the provided data and report it, (e.g., "Here's the data you asked for"). Contexualize or explain the results only if required to answer the user's question. 
-""")
 
 # --- 4. Nodes (Functions for each step in the graph) ---
 def plan_and_disambiguate(state: AgentState):
@@ -176,69 +162,83 @@ def plan_and_disambiguate(state: AgentState):
 import re
 
 def generate_sql(state: AgentState):
-    error = state.get("error")
-    # Only allow the LLM to output the SQL code block
-    sql_generator_chain = SQL_GENERATOR_PROMPT | llm
+    error = state.get("error", "None")
     
-    response = sql_generator_chain.invoke({
-        "plan": state["intermediate_steps"][-1].content.replace("PLAN: ", ""),
-        "question": state["question"],
-        "schema": db.get_table_info(),
-        "error_context": error or "None"
-    }).content
-
-    # Strict regex to extract only the SQL code block
+    # Fill the template
+    formatted_prompt = SQL_GENERATOR_PROMPT.format(
+        question=state['question'],
+        plan=state["intermediate_steps"][-1].content.replace("PLAN: ", ""),
+        schema=db.get_table_info(),
+        error_context=error
+    )
+    
+    # Invoke
+    response = llm_smart.invoke(formatted_prompt).content
+    
+    # Extract SQL
     match = re.search(r"```sql\n(.*?)\n```", response, re.DOTALL)
     sql_query = match.group(1).strip() if match else response.strip()
     
     return {"sql_query": sql_query, "error": None}
 
 
+from tabulate import tabulate
+
+
 def validate_and_execute_sql(state: AgentState):
     sql_query = state.get("sql_query", "")
-    current_attempt = state.get("attempt", 0)
-    
-    # 1. Guardrail
-    forbidden = ["DROP", "DELETE", "TRUNCATE", "ALTER", "INSERT", "UPDATE"]
-    if any(keyword in sql_query.upper() for keyword in forbidden):
-        return {"error": "Destructive SQL detected.", "db_result": "BLOCKED", "attempt": current_attempt + 1}
-    
     try:
-        # 2. Execution
-        print(f"--- Executing SQL (Attempt {current_attempt + 1}): {sql_query} ---")
-        db_result = db.run(sql_query) 
+        raw_result = db.run(sql_query)
+        import ast
+        results = ast.literal_eval(raw_result) if isinstance(raw_result, str) else raw_result
         
-        # 3. Truncate
-        result_str = str(db_result)
-        if len(result_str) > 2000:
-            result_str = result_str[:2000] + "..."
-            
-        return {"db_result": result_str, "error": None} # Clear error on success
+        if not results:
+            return {"db_result": "No data found", "error": None}
+
+        # Find the VERY LAST Select block to get the final aliases
+        final_select_part = sql_query.split('FROM')[-2].split('SELECT')[-1]
+        headers = [h.split(' AS ')[-1].strip().replace('`', '').split('.')[-1] 
+                   for h in final_select_part.split(',')]
+
+        formatted_result = tabulate(results, headers=headers, tablefmt="pipe")
         
+        return {"db_result": formatted_result, "error": None}
     except Exception as e:
-        print(f"--- DB ERROR: {str(e)} ---")
-        # Return error and INCREMENT the attempt
-        return {"error": str(e), "db_result": "ERROR", "attempt": current_attempt + 1}
-
-
+        return {"db_result": "ERROR", "error": str(e)}
+    
 def respond_to_user(state: AgentState):
-    # Ensure the result is formatted as a clear string
-    db_result = state.get("db_result")
+    db_result = state.get("db_result", "No results found.")
     
+    # Automatically extract headers if result is in list/table format
+    header_hint = "Columns found in result: " + (db_result.split('\n')[0] if '\n' in db_result else "Unknown")
+    if not db_result or db_result == "ERROR":
+        return {"response": "I encountered an error retrieving data. Please check the query logs."}
     prompt = f"""
-    You are a Data Assistant. Use the provided DATABASE RESULT to answer the user's question.
+    You are a data reporter. You are provided with the final, filtered result of a SQL query, which you will report to the user.
     
-    1. Look specifically for the column or value representing 'average_trips_per_station' if included in the user query.
-    2. If the data contains an average value, state it clearly in your answer.
-    3. Read the {db_result} carefully and answer the user's question.
+    {header_hint}
     
+    DATABASE RESULT:
+    {db_result}
+    
+    CORE GUIDELINES:
+    1. TRUST THE DATA: The data provided has already been filtered, joined, and aggregated by the SQL query. Do not attempt to re-filter, calculate missing time periods, or question the source of the data.
+    2. AVOID DATA HALLUCINATION: If the columns (like 'total_trip_count' or 'average_trip_duration') are present in the table above, the data is complete. Do not claim information is missing.
+    3. COLUMN MAPPING: Map the columns provided in the header hint to the user's question. Use these exact values.  You don't need to include the column names in your response.
+    4. PRESENTATION: Use the data provided to answer the user's question in a conversational and professional manner. You may add context only when required to answer the user's question.
+    5. RESPONSE: Read the {db_result} carefully and respond to the user's question.
+    6. CONTEXTUALIZE: Only use the information you find from querying the database when formulating your response. When listing, use a bullet point format and clearly separate each bullet, do not include bullet points within bullet points.    You may also use tables when appropriate.  Do not generate addtional code blocks in your response. 
+    7. CRITICAL: You are NOT allowed to invent data. If a specific metric is not in the {db_result} provided to you, you must state: 'The provided data does not contain the specific metrics to calculate this value.  NEVER make assumptions about the data. 
+    
+    8. AFTER you present the data, you may provide a conversational response only if it helps to answer the question.
+
     Question: {state['question']}
-    DATABASE RESULT: {db_result}
     
     Answer:"""
-    
-    final_answer = llm.invoke(prompt).content
-    return {"final_answer": final_answer}
+    print(f"DEBUG DATA: {state['db_result']}")
+    response = llm.invoke(prompt).content
+    return {"final_answer": response}
+
 
 def decide_next_step(state: AgentState):
     if state["clarification_needed"]:
