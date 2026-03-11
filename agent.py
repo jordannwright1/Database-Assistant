@@ -36,30 +36,27 @@ def get_bigquery_db():
 load_dotenv()
 creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 api_key = os.getenv("GROQ_API_KEY")
-# --- 1. Define Agent State (The "Memory" of the Graph) ---
+
+# --- 1. Define Agent State ---
 class AgentState(TypedDict):
     question: str
-    intermediate_steps: Annotated[List[BaseMessage], operator.add]
+    intermediate_steps: Annotated[List[str], operator.add] # Changed from BaseMessage to str
     sql_query: str
     db_result: str
     final_answer: str
     error: str
-    attempt: int 
+    attempt: int
 
 def should_continue(state: AgentState):
-    db_result = state.get("db_result", "No results found.")
-    if db_result == "ERROR" or "Data parsing failed" in db_result:
-        return {"final_answer": f"I hit a technical snag while retrieving the data: {state.get('error')}"}
-    # 1. If we have a hard error
+    # If there is an error, check if we should retry
     if state.get("error"):
-        # Check attempt count: only retry if attempt is less than 1
         current_attempt = state.get("attempt", 0)
-        if current_attempt < 1:
-            return "generate_sql" # Retry once
+        if current_attempt < 2: # Allow 2 attempts total
+            return "generate_sql"
         else:
-            return "respond" # Give up and report the error
+            return "respond" # Go to respond node to report the error to user
     
-    # 2. Success path
+    # Otherwise, proceed to respond
     return "respond"
 
 # --- 2. Database Connection & Semantic Layer ---
@@ -127,32 +124,44 @@ Your response should be 'PLAN: [Your detailed plan]'.
 
 SQL_GENERATOR_PROMPT = PromptTemplate.from_template("""
 ### ROLE
-You are a Senior BigQuery Architect. Write high-performance, single-pass SQL.
+You are a Senior BigQuery Architect. Write high-performance, one-shot SQL queries.
 
-### MANDATORY DATA STRUCTURE
-1. LABELS AS DATA: Never use `CASE WHEN` to pivot columns for different subscriber types. Instead, ALWAYS return the grouping variable (e.g., `subscriber_type`) as the first column.
-2. GROUP BY: Use `GROUP BY 1` to ensure every row in the result table is clearly labeled.
-3. NO CTEs: Write the query as a single block.
-4. ROW LIMIT: Always end with `LIMIT 20`.
+### THE "STATION SUMMARY" PATTERN (MANDATORY)
+To compare multiple stations accurately without duplicate rows:
+1. SELECT DISTINCT: Always use `SELECT DISTINCT` in the outermost layer.
+2. NESTED AGGREGATION: 
+   - Inner subquery: `COUNT(*)` grouped by `station_id` and `trip_date`.
+   - Outer layer: Calculate `PERCENTILE_CONT` partitioned by `station_id`.
+3. SCOPE: Refer to columns only by their names in the outer layer (e.g., `station_id`, not `s.station_id`).
 
-### CALCULATION FORMULAS
-- Duration: `AVG(duration_minutes) AS avg_duration`
-- Percentage: `(COUNTIF(condition) * 100.0 / COUNT(*)) AS metric_pct`
-- Comparison: `(AVG(CASE WHEN A) - AVG(CASE WHEN B)) AS discrepancy`
-
-### SQL CONSTRAINTS
-- Table: `bi-project-489517.austin_bikeshare.fact_trips`
-- Date: `trip_date >= DATE_SUB((SELECT MAX(trip_date) FROM bi-project-489517.austin_bikeshare.fact_trips), INTERVAL 30 DAY)`
-
-### ERROR CORRECTION
-If the previous attempt failed, the error was: {error_context}
-Adjust your syntax to fix this specific error.
+### MANDATORY SQL TEMPLATE
+SELECT DISTINCT
+  station_name,
+  station_id,
+  PERCENTILE_CONT(daily_count, 0.5) OVER(PARTITION BY station_id) AS median_daily_trips,
+  MAX(daily_count) OVER(PARTITION BY station_id) / NULLIF(AVG(daily_count) OVER(PARTITION BY station_id), 0) AS outlier_ratio
+FROM (
+  SELECT 
+    s.station_name, 
+    base.station_id, 
+    base.daily_count
+  FROM (
+    SELECT start_station_id AS station_id, trip_date, COUNT(*) as daily_count
+    FROM `bi-project-489517.austin_bikeshare.fact_trips`
+    WHERE trip_date >= DATE_SUB((SELECT MAX(trip_date) FROM `bi-project-489517.austin_bikeshare.fact_trips`), INTERVAL 30 DAY)
+    GROUP BY 1, 2
+  ) base
+  JOIN `bi-project-489517.austin_bikeshare.dim_stations` s ON base.station_id = s.station_id
+)
+ORDER BY median_daily_trips DESC
+LIMIT 10;
 
 ### SCHEMA INFO
 {schema}
 
 Question: {question}
 Plan: {plan}
+Previous Error (if any): {error_context}
 
 Generate only the SQL in a ```sql ... ``` block.
 """)
@@ -163,32 +172,32 @@ def plan_and_disambiguate(state: AgentState):
     planner_chain = PLANNER_PROMPT | llm
     plan_output = planner_chain.invoke({"question": state["question"]})
     
-    if "CLARIFICATION_NEEDED" in plan_output.content:
-        return {"clarification_needed": True, "final_answer": plan_output.content}
-    else:
-        return {"clarification_needed": False, "intermediate_steps": [AIMessage(content=plan_output.content)]}
+    # Return just the string content to keep the state "hashable"
+    return {
+        "intermediate_steps": [str(plan_output.content)]
+    }
 
-import re
 
 def generate_sql(state: AgentState):
     error = state.get("error", "None")
     current_attempt = state.get("attempt", 0) + 1
-    # Fill the template
+    
+    # Access the last string in intermediate_steps
+    last_plan = state["intermediate_steps"][-1] if state["intermediate_steps"] else ""
+    
     formatted_prompt = SQL_GENERATOR_PROMPT.format(
         question=state['question'],
-        plan=state["intermediate_steps"][-1].content.replace("PLAN: ", ""),
+        plan=last_plan.replace("PLAN: ", ""),
         schema=db.get_table_info(),
         error_context=error
     )
     
-    # Invoke
     response = llm.invoke(formatted_prompt).content
     
-    # Extract SQL
     match = re.search(r"```sql\n(.*?)\n```", response, re.DOTALL)
     sql_query = match.group(1).strip() if match else response.strip()
-    
     return {"sql_query": sql_query, "error": None, "attempt": current_attempt}
+
 
 
 import ast
@@ -202,29 +211,47 @@ def validate_and_execute_sql(state: AgentState):
     try:
         raw_result = db.run(sql_query, fetch="all")
         
-        # 1. Handle if the DB returns a string instead of a list
+        # 1. Handle stringified results
         if isinstance(raw_result, str):
             try:
-                # ast.literal_eval safely converts the string to a real list/tuple object
                 raw_result = ast.literal_eval(raw_result)
             except:
-                # If it's not a list, return as-is
-                return {"db_result": raw_result, "error": None}
+                return {"db_result": str(raw_result), "error": None}
         
         if not raw_result:
             return {"db_result": "No data found", "error": None}
 
-        # 2. Extract headers from SQL
-        header_match = re.findall(r"AS\s+[`'\" ]*([a-zA-Z0-9_]+)[`'\" ]*", sql_query, re.IGNORECASE)
+        # 2. Robust dict-to-list conversion
+        processed_data = []
+        for row in raw_result:
+            if isinstance(row, dict):
+                processed_data.append(list(row.values()))
+            else:
+                processed_data.append(row)
+
+        # 3. Headers extraction
+        header_match = re.findall(r"AS\s+[`'\" ]*([a-zA-Z0-9_]+)|SELECT\s+([a-zA-Z0-9_.]+)", sql_query, re.IGNORECASE)
+        headers = [h[0] if h[0] else h[1].split('.')[-1] for h in header_match]
         
-        # 3. Create a clean Markdown table (Limit to first 10 rows to save tokens!)
-        formatted_table = tabulate(raw_result[:10], headers=header_match, tablefmt="pipe")
+        # 4. Generate table
+        formatted_table = tabulate(
+            processed_data[:10], 
+            headers=headers[:len(processed_data[0]) if processed_data else 0], 
+            tablefmt="pipe"
+        )
         
-        return {"db_result": formatted_table, "error": None}
+        # CRITICAL FIX: Ensure return is a simple dictionary
+        # Explicitly ensuring no complex objects leak into the state
+        return {
+            "db_result": str(formatted_table), 
+            "error": None
+        }
 
     except Exception as e:
+        # Catch and return error as a string
         return {"db_result": "ERROR", "error": str(e)}
-        
+
+
 
 def respond_to_user(state: AgentState):
     db_result = state.get("db_result", "No results found.")
@@ -242,26 +269,36 @@ def respond_to_user(state: AgentState):
 
     # 3. PROMPT PREPARATION (Keep your exact prompt structure)
     prompt = f"""
-    You are a data reporter. You are provided with the final, filtered result of a SQL query, which you will report to the user.
-    
-    DATABASE RESULT:
-    {db_result}
-    
-    CORE GUIDELINES:
-    1. TRUST THE DATA: The data provided has already been filtered, joined, and aggregated by the SQL query. Do not attempt to re-filter, calculate missing time periods, or question the source of the data.
-    2. AVOID DATA HALLUCINATION: If the columns (like 'total_trip_count' or 'average_trip_duration') are present in the table above, the data is complete. Do not claim information is missing.
-    3. COLUMN MAPPING: Map the columns provided in the header hint to the user's question. Use these exact values.  You don't need to include the column names in your response.
-    4. PRESENTATION: Use the data provided to answer the user's question in a conversational and professional manner. You may add context only when required to answer the user's question.
-    5. RESPONSE: Read the {db_result} carefully and respond to the user's question.
-    6. CONTEXTUALIZE: Only use the information you find from querying the database when formulating your response. When listing, use a bullet point format and clearly separate each bullet, do not include bullet points within bullet points.    You may also use tables when appropriate.  Do not generate addtional code blocks in your response. 
-    7. CRITICAL: You are NOT allowed to invent data. If a specific metric is not in the {db_result} provided to you, you must state: 'The provided data does not contain the specific metrics to calculate this value.  NEVER make assumptions about the data. 
-    
-    8. AFTER you present the data, you may provide a conversational response only if it helps to answer the question.
+        You are a Data Reporter and Journalist. You are provided with a final, filtered SQL result table which you must report to the user with 100% accuracy.
+        
+        DATABASE RESULT:
+        {db_result}
+        
+        CORE GUIDELINES:
+        1. TRUST THE DATA: The data has already been aggregated. Do not re-filter or question the source.
+        2. RANKING INTEGRITY: You MUST report stations in the order they appear in the table. If 'Nueces & 26th' has a higher number than '6th & Congress', it must be listed first.
+        3. AVOID DATA HALLUCINATION: Use exact values from the table. If a metric isn't there, state: 'The provided data does not contain the specific metrics to calculate this value.'
+        4. COLUMN MAPPING: Use the provided columns to answer the question. You do not need to include technical column names in your prose.
+        5. PRESENTATION: Use a professional, conversational tone. Use bullet points for lists and tables where they improve clarity. Do not use nested bullet points or generate code blocks.
 
-    Question: {state['question']}
-    
-    Answer:"""
+        6. SORTING VERIFICATION: When reporting top stations, verify the values manually. 
+        If the table values are [3838, 3798, 3619], you MUST list them in that exact order (3838 first, then 3798, then 3619).
 
+        STATISTICAL INTERPRETATION (CRITICAL):
+        - OUTLIER RATIO: This is defined as (Max Daily Trips / Average Daily Trips). 
+        - A ratio of 1.0 means perfectly consistent daily volume.
+        - A high ratio (e.g., > 10.0) indicates a massive one-day "spike" or anomaly relative to that station's typical activity.
+        - NEVER mention 'Interquartile Range' (IQR) or other statistical theories not present in the data.
+
+        RESPONSE STRUCTURE:
+        1. Directly answer the user's question using the Top results from the table.
+        2. Highlight any significant outliers based on the 'outlier_ratio'.
+        3. Provide a brief conversational summary of what these trends suggest about the Austin Bikeshare network.
+
+        Question: {state['question']}
+        
+        Answer:"""
+    
     # 4. EXECUTION
     print(f"DEBUG DATA: {db_result}")
     
