@@ -18,39 +18,43 @@ api_key = os.getenv("MY_API_KEY")
 
 @st.cache_resource
 def get_db_connection():
-    # 1. Force environment variables at the very start of the function
+    import os
+    # 1. Kill the metadata lookup before it starts
     os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
-    os.environ["GCE_METADATA_HOST"] = "127.0.0.1"    
+    
+    from google.cloud import bigquery
     from google.oauth2 import service_account
     from langchain_community.utilities import SQLDatabase
-    from google.cloud import bigquery
+    from google.api_core import client_options
+
     try:
         sa_info = dict(st.secrets["gcp_service_account"])
         credentials = service_account.Credentials.from_service_account_info(sa_info)
-        print(f"DEBUG: Found credentials for project: {sa_info.get('project_id')}")
-        # 2. Explicitly define the 'universe_domain'. 
-        # This is the secret sauce that stops the metadata lookup.
-        from google.api_core import client_options
-        opts = client_options.ClientOptions(
-            api_endpoint="https://bigquery.googleapis.com",
-            universe_domain="googleapis.com" 
-        )
         
+        # 2. This is the critical part: Explicitly define the universe
+        opts = client_options.ClientOptions(universe_domain="googleapis.com")
+        
+        # 3. Create the client with the options
         client = bigquery.Client(
             credentials=credentials, 
             project=sa_info["project_id"],
+            client_options=opts
         )
         
+        # 4. Pass the client to the SQLAlchemy engine
+        # This prevents SQLAlchemy from trying to create its own default client
         return SQLDatabase.from_uri(
             f"bigquery://{sa_info['project_id']}/austin_bikeshare",
-            engine_args={"connect_args": {"client": client}}
+            engine_args={
+                "connect_args": {
+                    "client": client,
+                }
+            }
         )
     except Exception as e:
         st.error(f"Cloud Connection Error: {e}")
         return None
-            
-# 1. Force the Google client to NOT look for the metadata server
-# This prevents the initial timeout before we even define the client
+                
 
 
 
