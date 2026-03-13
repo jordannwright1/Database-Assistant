@@ -13,47 +13,33 @@ from langchain_core.prompts import PromptTemplate
 from langgraph.graph import StateGraph, END
 from langchain_ollama import ChatOllama
 from langchain_groq import ChatGroq
-
+import os
+import json
+from google.oauth2 import service_account
+from google.cloud import bigquery
+from langchain_community.utilities import SQLDatabase
+import tempfile
 
 load_dotenv()
 api_key = os.getenv("MY_API_KEY")
 @st.cache_resource
-def get_db_connection():
-    import os
-    import json
-    from google.oauth2 import service_account
-    from google.cloud import bigquery
-    from langchain_community.utilities import SQLDatabase
-    
-    # --- 1. Sourcing the Credentials ---
+def get_bigquery_db():
+    # 1. Handle Cloud Deployment
     if "gcp_service_account" in st.secrets:
-        # PRODUCTION: Get from Streamlit Secrets
-        sa_info = dict(st.secrets["gcp_service_account"])
-        credentials = service_account.Credentials.from_service_account_info(sa_info)
+        # Create a temporary file to hold the secrets safely
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
+            json.dump(dict(st.secrets["gcp_service_account"]), f)
+            temp_path = f.name
+
+        # Connect using the temporary file path
+        db_uri = f"bigquery://bi-project-489517/austin_bikeshare?credentials_path={temp_path}"
+
+    # 2. Handle Local Development
     else:
-        # LOCAL: Use the JSON file in your repo
-        # Ensure 'GOOGLE_APPLICATION_CREDENTIALS' in your .env points to the filename
-        key_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-        credentials = service_account.Credentials.from_service_account_file(key_path)
-        with open(key_path) as f:
-            sa_info = json.load(f)
+        db_uri = "bigquery://bi-project-489517/austin_bikeshare"
 
-    # --- 2. Initialize Client with Explicit Universe Domain ---
-    # This is the "kill-switch" for the metadata error
-    from google.api_core import client_options
-    opts = client_options.ClientOptions(universe_domain="googleapis.com")
-
-    client = bigquery.Client(
-        credentials=credentials, 
-        project=sa_info["project_id"],
-        client_options=opts
-    )
-
-    # --- 3. Return the Database Object ---
-    return SQLDatabase.from_uri(
-        f"bigquery://{sa_info['project_id']}/austin_bikeshare",
-        engine_args={"connect_args": {"client": client}}
-    )
+    return SQLDatabase.from_uri(db_uri)
+db = get_bigquery_db()
 
 # --- 1. Define Agent State (The "Memory" of the Graph) ---
 class AgentState(TypedDict):
@@ -231,7 +217,6 @@ def plan_and_disambiguate(state: AgentState):
 import re
 
 def generate_sql(state: AgentState):
-    db = get_db_connection()
     error = state.get("error")
     # Only allow the LLM to output the SQL code block
     sql_generator_chain = SQL_GENERATOR_PROMPT | llm_smart
@@ -255,7 +240,6 @@ import ast
 from tabulate import tabulate
 
 def validate_and_execute_sql(state: AgentState):
-    db = get_db_connection()
     sql_query = state.get("sql_query", "")
     current_attempt = state.get("attempt", 0)
     
