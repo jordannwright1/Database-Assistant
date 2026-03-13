@@ -190,6 +190,27 @@ Division Safety: When calculating percentages, always cast the denominator to pr
 3. SOURCE: Prefer vw_trips_detailed unless specific joins are required.
 4. NO DML: Never use INSERT, DELETE, DROP, or ALTER.
 
+                                                    BigQuery Scalar Subquery Rule:
+When performing arithmetic operations using a value from a Common Table Expression (CTE) or subquery, always ensure the subquery returns a single scalar value of a numeric type (INT64, FLOAT64).
+
+Avoid passing a STRUCT to a math operator. Instead of:
+SELECT 100 / (SELECT my_cte FROM my_cte)
+
+Always use explicit column selection to ensure a numeric return:
+SELECT 100 / (SELECT column_name FROM my_cte)
+
+Additionally, when calculating percentages, ensure the divisor is cast to FLOAT64 to avoid integer division errors, and use SAFE_DIVIDE(numerator, denominator) to prevent "Division by Zero" crashes.
+                                                    
+
+                                                    Aggregation & Safety Rules:
+
+Always Aggregate: Unless specifically asked for "raw data" or a "list," always wrap outlier detection or statistical analysis in a GROUP BY or COUNT(*) to return a summary. Never return thousands of rows of categorical labels (e.g., "normal", "outlier").
+
+Window Functions over Subqueries: Encourage the use of Window Functions (e.g., AVG(col) OVER()) instead of repeated scalar subqueries in the WHERE or CASE clauses to improve BigQuery performance.
+
+Avoid Cartesian Products: Do not comma-join CTEs (e.g., FROM avg_duration, std_duration) as this can create unintended cross-joins. Use a single stats CTE or a CROSS JOIN.
+
+Limit by Default: If a query is likely to return many rows, append LIMIT 100 unless the user specifies otherwise.
 
 ---
 Generate only the final SQL query in a ```sql ... ``` block.

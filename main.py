@@ -6,8 +6,7 @@ from groq import Groq
 # --- 1. Configuration & Setup ---
 if "GROQ" in st.secrets:
     os.environ["GROQ_API_KEY"] = st.secrets["GROQ"]["GROQ_API_KEY"]
-else:
-    st.error("GROQ API key not found in secrets under [GROQ] section!")
+
 
 st.set_page_config(page_title="Austin Bikeshare AI", page_icon="🚲", layout="wide")
 st.title("🚲 Austin Bikeshare AI Assistant")
