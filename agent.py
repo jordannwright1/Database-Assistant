@@ -12,69 +12,50 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 from langchain_groq import ChatGroq
-import tempfile
-import json
-
-@st.cache_resource
-def get_bigquery_db():
-    # 1. Handle Cloud Deployment
-    if "gcp_service_account" in st.secrets:
-        # Create a temporary file to hold the secrets safely
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
-            json.dump(dict(st.secrets["gcp_service_account"]), f)
-            temp_path = f.name
-        
-        # Connect using the temporary file path
-        db_uri = f"bigquery://bi-project-489517/austin_bikeshare?credentials_path={temp_path}"
-    
-    # 2. Handle Local Development
-    else:
-        db_uri = "bigquery://bi-project-489517/austin_bikeshare"
-        
-    return SQLDatabase.from_uri(db_uri)
 
 load_dotenv()
-creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-api_key = os.getenv("GROQ_API_KEY")
-
-# --- 1. Define Agent State ---
+api_key = os.getenv("MY_API_KEY")
+# --- 1. Define Agent State (The "Memory" of the Graph) ---
 class AgentState(TypedDict):
     question: str
-    intermediate_steps: Annotated[List[str], operator.add] # Changed from BaseMessage to str
+    intermediate_steps: Annotated[List[BaseMessage], operator.add]
     sql_query: str
     db_result: str
     final_answer: str
     error: str
-    attempt: int
+    attempt: int 
 
 def should_continue(state: AgentState):
-    # If there is an error, check if we should retry
-    if state.get("error"):
-        current_attempt = state.get("attempt", 0)
-        if current_attempt < 2: # Allow 2 attempts total
-            return "generate_sql"
-        else:
-            return "respond" # Go to respond node to report the error to user
+    attempts = state.get("attempt", 0)
     
-    # Otherwise, proceed to respond
+    # 1. If we have a hard error
+    if state.get("error"):
+        # If we have reached 2 attempts, do not return "generate_sql"
+        if attempts >= 2:
+            return "respond" 
+        return "generate_sql"
+    
+    # 2. Success path
     return "respond"
+
 
 # --- 2. Database Connection & Semantic Layer ---
 # Initialize BigQuery connection (read-only service account recommended)
-db = get_bigquery_db()
+db = SQLDatabase.from_uri("bigquery://bi-project-489517/austin_bikeshare")
 # llm = ChatOllama(model="llama3", temperature=0)
 # llm = ChatGoogleGenerativeAI(
 #     model="gemini-2.5-flash", temperature=0)
 
-llm = ChatGroq(
-    model="llama-3.1-8b-instant",
-    temperature=0,
-    api_key=api_key
-)
 llm_smart = ChatGroq(
     model="llama-3.3-70b-versatile",
     temperature=0,
-    api_key=api_key 
+    api_key=os.getenv("MY_API_KEY") 
+)
+
+llm = ChatGroq(
+    model="llama-3.1-8b-instant", 
+    temperature=0,
+    api_key=os.getenv("MY_API_KEY")
 )
 
 # --- 3. Prompts ---
@@ -124,191 +105,180 @@ Your response should be 'PLAN: [Your detailed plan]'.
 
 SQL_GENERATOR_PROMPT = PromptTemplate.from_template("""
 ### ROLE
-You are a Senior BigQuery Architect. Write high-performance, one-shot SQL queries.
-
-### THE "STATION SUMMARY" PATTERN (MANDATORY)
-To compare multiple stations accurately without duplicate rows:
-1. SELECT DISTINCT: Always use `SELECT DISTINCT` in the outermost layer.
-2. NESTED AGGREGATION: 
-   - Inner subquery: `COUNT(*)` grouped by `station_id` and `trip_date`.
-   - Outer layer: Calculate `PERCENTILE_CONT` partitioned by `station_id`.
-3. SCOPE: Refer to columns only by their names in the outer layer (e.g., `station_id`, not `s.station_id`).
-
-### MANDATORY SQL TEMPLATE
-SELECT DISTINCT
-  station_name,
-  station_id,
-  PERCENTILE_CONT(daily_count, 0.5) OVER(PARTITION BY station_id) AS median_daily_trips,
-  MAX(daily_count) OVER(PARTITION BY station_id) / NULLIF(AVG(daily_count) OVER(PARTITION BY station_id), 0) AS outlier_ratio
-FROM (
-  SELECT 
-    s.station_name, 
-    base.station_id, 
-    base.daily_count
-  FROM (
-    SELECT start_station_id AS station_id, trip_date, COUNT(*) as daily_count
-    FROM `bi-project-489517.austin_bikeshare.fact_trips`
-    WHERE trip_date >= DATE_SUB((SELECT MAX(trip_date) FROM `bi-project-489517.austin_bikeshare.fact_trips`), INTERVAL 30 DAY)
-    GROUP BY 1, 2
-  ) base
-  JOIN `bi-project-489517.austin_bikeshare.dim_stations` s ON base.station_id = s.station_id
-)
-ORDER BY median_daily_trips DESC
-LIMIT 10;
-
-### SCHEMA INFO
-{schema}
-
-Question: {question}
+You are a precise Senior BigQuery Architect. You write cost-efficent, mathematically precise SQL for BigQuery.
+User question: {question}
 Plan: {plan}
-Previous Error (if any): {error_context}
+Database Schema: {schema}
+Error Context: Use {error_context} to modify the original SQL query to resolve the error.
 
-Generate only the SQL in a ```sql ... ``` block.
+PROJECT: bi-project-489517
+DATASET: austin_bikeshare
+ALL FROM statements MUST reference the PROJECT and DATASET explicitly, NEVER query just the table name (e.g., fact_trips).  
+
+                                                    If more information is required, perform JOINS to connect to the dim tables in FIRST SELECT statement and find the information you need to engineer features that calculate the values the user requests in the query.  The first CTE should include all of the necessary JOIN statements to the dim tables (e.g. dim_stations, etc.) needed in order to answer the question {question}.
+
+                                                    "Never use CURRENT_DATE or hardcoded dates. Always use (SELECT MAX(trip_date) FROM fact_trips) as the anchor point for your WHERE clauses."
+
+                                                    "STRICT RULE: Never use AT as a table alias. Use full table names or safe aliases like t1, sub_metrics, etc."
+
+                                                    "Constraint: When creating CTEs, ensure every column required for subsequent aggregations is explicitly selected in the prior CTE's SELECT statement."
+
+                                                    ### SQL REQUIREMENTS
+1. Use explicit aliases for every column in the SELECT statement. 
+   Example: AVG(duration_minutes) AS avg_duration_min
+2. NEVER use raw calculations or functions without an AS alias.
+3. The column aliases MUST NOT contain spaces or special characters (use underscores).
+4. Do not include comments inside the ```sql block.
+
+                                                    "In your final SELECT statement, explicitly ALIAS every column with a simple, unique name (e.g., total_trips, rush_pct). Never leave a column as a raw calculation."                                                
+### CORE CALCULATION POLICY (PRIORITY 1)
+1. NO ESTIMATION: Never guess, simulate, or provide hypothetical numbers. 
+2. SQL-ONLY MATH: All calculations MUST be performed in SQL.  Engineer your own features when necessary to answer the question.
+3. FORCED CTE STRUCTURE: For any question involving averages, comparisons, or thresholds:
+   a) YOU MUST use WITH clauses (CTEs) to perform the math.
+   b) CTE 1: Calculate the base metric per entity (e.g., trips per station).
+   c) CTE 2: Calculate the global average or threshold from CTE 1.
+   d) FINAL SELECT: Filter or join the entity metrics against the global average.
+
+### SQL RULES (PRIORITY 2)
+1. RESERVED KEYWORDS: If a column or alias is a reserved keyword (like 'AT'), wrap it in backticks: `AT`.
+2. GROUPING: Always group by ID. Use ANY_VALUE(name_column) for descriptive names in SELECT.
+3. SOURCE: Prefer vw_trips_detailed unless specific joins are required.
+4. NO DML: Never use INSERT, DELETE, DROP, or ALTER.
+
+### SCHEMA LOCK
+- fact_trips: trip_id, start_station_id, end_station_id, subscriber_id, duration_minutes, start_hour, trip_date.
+- dim_stations: station_id, station_name.
+- dim_subscribers: subscriber_id, subscriber_category.
+- ALWAYS JOIN dim_stations ON start_station_id = station_id.
+- ALWAYS JOIN dim_subscribers ON subscriber_id = subscriber_id.
+
+---
+Generate only the final SQL query in a ```sql ... ``` block.
+Generated SQL:
 """)
 
+# Response generator remains largely the same but simplified
+RESPONSE_GENERATOR_PROMPT = PromptTemplate.from_template("""
+User question: {question}
+Result: {db_result}
+
+Provide a clear, professional answer. If the result is empty, inform the user that no data matches their criteria.  If the user asks an analytical question, do NOT provide a textual explanation or hypothetical calculation.  Only use the information you find from querying the database when formulating your response.  When listing, use a bullet point format.  Return the provided data and report it, (e.g., "Here's the data you asked for"). Contexualize or explain the results only if required to answer the user's question. 
+""")
 
 # --- 4. Nodes (Functions for each step in the graph) ---
 def plan_and_disambiguate(state: AgentState):
-    planner_chain = PLANNER_PROMPT | llm
+    planner_chain = PLANNER_PROMPT | llm_smart
     plan_output = planner_chain.invoke({"question": state["question"]})
     
-    # Return just the string content to keep the state "hashable"
-    return {
-        "intermediate_steps": [str(plan_output.content)]
-    }
+    if "CLARIFICATION_NEEDED" in plan_output.content:
+        return {"clarification_needed": True, "final_answer": plan_output.content}
+    else:
+        return {"clarification_needed": False, "intermediate_steps": [AIMessage(content=plan_output.content)]}
 
+import re
 
 def generate_sql(state: AgentState):
-    error = state.get("error", "None")
-    current_attempt = state.get("attempt", 0) + 1
+    error = state.get("error")
+    # Only allow the LLM to output the SQL code block
+    sql_generator_chain = SQL_GENERATOR_PROMPT | llm_smart
     
-    # Access the last string in intermediate_steps
-    last_plan = state["intermediate_steps"][-1] if state["intermediate_steps"] else ""
-    
-    formatted_prompt = SQL_GENERATOR_PROMPT.format(
-        question=state['question'],
-        plan=last_plan.replace("PLAN: ", ""),
-        schema=db.get_table_info(),
-        error_context=error
-    )
-    
-    response = llm.invoke(formatted_prompt).content
-    
+    response = sql_generator_chain.invoke({
+        "plan": state["intermediate_steps"][-1].content.replace("PLAN: ", ""),
+        "question": state["question"],
+        "schema": db.get_table_info(),
+        "error_context": error or "None"
+    }).content
+
+    # Strict regex to extract only the SQL code block
     match = re.search(r"```sql\n(.*?)\n```", response, re.DOTALL)
     sql_query = match.group(1).strip() if match else response.strip()
-    return {"sql_query": sql_query, "error": None, "attempt": current_attempt}
+    
+    return {"sql_query": sql_query, "error": None}
 
 
 
 import ast
-import re
 from tabulate import tabulate
 
 def validate_and_execute_sql(state: AgentState):
     sql_query = state.get("sql_query", "")
-    print(f"--- EXECUTING SQL ---")
+    current_attempt = state.get("attempt", 0)
     
     try:
-        raw_result = db.run(sql_query, fetch="all")
+        # 1. Execution
+        raw_result = db.run(sql_query)
         
-        # 1. Handle stringified results
+        # Ensure we have a list of tuples/lists
         if isinstance(raw_result, str):
             try:
                 raw_result = ast.literal_eval(raw_result)
             except:
-                return {"db_result": str(raw_result), "error": None}
+                pass
         
-        if not raw_result:
-            return {"db_result": "No data found", "error": None}
+        if not raw_result or raw_result == "[]":
+            return {"db_result": "No data found", "error": None, "attempt": current_attempt}
 
-        # 2. Robust dict-to-list conversion
-        processed_data = []
-        for row in raw_result:
-            if isinstance(row, dict):
-                processed_data.append(list(row.values()))
-            else:
-                processed_data.append(row)
-
-        # 3. Headers extraction
-        header_match = re.findall(r"AS\s+[`'\" ]*([a-zA-Z0-9_]+)|SELECT\s+([a-zA-Z0-9_.]+)", sql_query, re.IGNORECASE)
-        headers = [h[0] if h[0] else h[1].split('.')[-1] for h in header_match]
+        headers = re.findall(r"AS\s+([a-zA-Z0-9_]+)", sql_query, re.IGNORECASE)
         
-        # 4. Generate table
+        # If extraction fails, fallback to readable placeholders
+        if not headers or len(headers) != len(raw_result[0]):
+            headers = ["membership_type", "avg_duration_min", "total_trips", "rush_trips", "rush_percentage"]
+        # 3. Create Markdown table
         formatted_table = tabulate(
-            processed_data[:10], 
-            headers=headers[:len(processed_data[0]) if processed_data else 0], 
-            tablefmt="pipe"
+            raw_result, 
+            headers=headers, 
+            tablefmt="pipe",
+            showindex=False
         )
+            
+        return {"db_result": formatted_table, "error": None, "attempt": current_attempt}        
         
-        # CRITICAL FIX: Ensure return is a simple dictionary
-        # Explicitly ensuring no complex objects leak into the state
-        return {
-            "db_result": str(formatted_table), 
-            "error": None
-        }
-
     except Exception as e:
-        # Catch and return error as a string
-        return {"db_result": "ERROR", "error": str(e)}
-
-
+        print(f"--- DB ERROR (Attempt {current_attempt + 1}): {str(e)} ---")
+        # Increment the attempt counter to trigger the 2-try limit
+        return {
+            "error": str(e), 
+            "db_result": "ERROR", 
+            "attempt": current_attempt + 1 
+        }
+    
 
 def respond_to_user(state: AgentState):
-    db_result = state.get("db_result", "No results found.")
-    error_context = state.get("error", "")
-    
-    # 1. CRITICAL ERROR HANDLING: 
-    # If the execution node flagged an error, stop here and report it.
-    if db_result == "ERROR" or (error_context and "failed" in error_context.lower()):
-        error_message = f"I encountered a technical error while retrieving the data: {error_context}"
-        return {"final_answer": error_message}
+    db_result = state.get("db_result")
+    error = state.get("error")
+    attempt = state.get("attempt", 0)
+    print(f"DEBUG:{db_result}")
+    # 1. Handle Critical Failures (The "2-Attempt" Exit)
+    if error and attempt >= 2:
+        return {"final_answer": f"I attempted to resolve the data request twice but encountered a persistent error: {error}. Please try rephrasing your question."}
 
-    # 2. NO DATA HANDLING:
-    if db_result == "No data found" or not db_result:
-        return {"final_answer": "The query executed successfully, but no records matched your request in the Austin Bikeshare dataset."}
+    # 2. Handle No Data
+    if not db_result or db_result == "No data found":
+        return {"final_answer": "The query was successful, but no data was found matching your specific criteria in the Austin Bikeshare dataset."}
 
-    # 3. PROMPT PREPARATION (Keep your exact prompt structure)
+    # 3. Enhanced Prompting for Data Accuracy
     prompt = f"""
-        You are a Data Reporter and Journalist. You are provided with a final, filtered SQL result table which you must report to the user with 100% accuracy.
-        
-        DATABASE RESULT:
-        {db_result}
-        
-        CORE GUIDELINES:
-        1. TRUST THE DATA: The data has already been aggregated. Do not re-filter or question the source.
-        2. RANKING INTEGRITY: You MUST report stations in the order they appear in the table. If 'Nueces & 26th' has a higher number than '6th & Congress', it must be listed first.
-        3. AVOID DATA HALLUCINATION: Use exact values from the table. If a metric isn't there, state: 'The provided data does not contain the specific metrics to calculate this value.'
-        4. COLUMN MAPPING: Use the provided columns to answer the question. You do not need to include technical column names in your prose.
-        5. PRESENTATION: Use a professional, conversational tone. Use bullet points for lists and tables where they improve clarity. Do not use nested bullet points or generate code blocks.
+    You are a Senior Data Analyst. You are provided with a Markdown table representing results from the Austin Bikeshare database.
 
-        6. SORTING VERIFICATION: When reporting top stations, verify the values manually. 
-        If the table values are [3838, 3798, 3619], you MUST list them in that exact order (3838 first, then 3798, then 3619).
+    ---
+    DATA TABLE:
+    {db_result}
+    ---
 
-        STATISTICAL INTERPRETATION (CRITICAL):
-        - OUTLIER RATIO: This is defined as (Max Daily Trips / Average Daily Trips). 
-        - A ratio of 1.0 means perfectly consistent daily volume.
-        - A high ratio (e.g., > 10.0) indicates a massive one-day "spike" or anomaly relative to that station's typical activity.
-        - NEVER mention 'Interquartile Range' (IQR) or other statistical theories not present in the data.
+    INSTRUCTIONS:
+    1. Answer the user's question: "{state['question']}"
+    2. Use a professional, conversational tone.
+    3. If percentages or averages are provided in the table, report them exactly as shown. Do not recalculate them unless the math is explicitly requested.
 
-        RESPONSE STRUCTURE:
-        1. Directly answer the user's question using the Top results from the table.
-        2. Highlight any significant outliers based on the 'outlier_ratio'.
-        3. Provide a brief conversational summary of what these trends suggest about the Austin Bikeshare network.
-
-        Question: {state['question']}
-        
-        Answer:"""
+    Answer:"""
     
-    # 4. EXECUTION
-    print(f"DEBUG DATA: {db_result}")
-    
+    # Execution using the LLM 
     try:
-        # Use your standard llm invocation
-        response = llm.invoke(prompt).content
-        return {"final_answer": response}
+        final_answer = llm_smart.invoke(prompt).content
+        return {"final_answer": final_answer}
     except Exception as e:
-        print(f"--- RESPONSE NODE ERROR: {str(e)} ---")
-        return {"final_answer": f"I analyzed the data, but I'm having trouble formatting the response right now. Raw Result: {db_result}"}
+        return {"final_answer": f"Data retrieved successfully, but I had trouble formatting the summary. Raw Data: {db_result}"}
     
 
 def decide_next_step(state: AgentState):
