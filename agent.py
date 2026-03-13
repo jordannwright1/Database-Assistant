@@ -147,7 +147,7 @@ GOOD: SELECT * FROM `bi-project-489517.austin_bikeshare.dim_stations`
 
                                                     If more information is required, perform JOINS to connect to the dim tables in FIRST SELECT statement and find the information you need to engineer features that calculate the values the user requests in the query.  The first CTE should include all of the necessary JOIN statements to the dim tables (e.g. dim_stations, etc.) needed in order to answer the question {question}.
 
-                                                    "Never use CURRENT_DATE or hardcoded dates. Always use (SELECT MAX(trip_date) FROM fact_trips) as the anchor point for your WHERE clauses."
+                                                    "When the user doesn't specify a date, calculate metrics for the last 30 days of data available. Use: WHERE trip_date >= DATE_SUB((SELECT MAX(trip_date) FROM fact_trips), INTERVAL 30 DAY)"
 
                                                     "STRICT RULE: Never use AT as a table alias. Use full table names or safe aliases like t1, sub_metrics, etc."
 
