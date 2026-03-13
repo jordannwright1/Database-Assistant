@@ -1,5 +1,4 @@
 import operator
-os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
 from typing import TypedDict, Annotated, List, Union
 from langchain_openai import ChatOpenAI
 from langchain_community.utilities import SQLDatabase
@@ -9,6 +8,7 @@ from langchain_core.prompts import PromptTemplate
 from langgraph.graph import StateGraph, END
 import streamlit as st
 import os
+os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
