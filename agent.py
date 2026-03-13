@@ -1,6 +1,4 @@
 import os
-os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
-os.environ["GCE_METADATA_HOST"] = "127.0.0.1"
 from dotenv import load_dotenv
 import streamlit as st
 import operator
