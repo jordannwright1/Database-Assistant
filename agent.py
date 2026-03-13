@@ -8,7 +8,6 @@ from langchain_core.prompts import PromptTemplate
 from langgraph.graph import StateGraph, END
 import streamlit as st
 import os
-os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
@@ -21,6 +20,7 @@ api_key = os.getenv("MY_API_KEY")
 @st.cache_resource
 def get_db_connection():
     """Initializes and caches the database connection."""
+    os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
     try:
         # 1. Get credentials from secrets
         sa_info = dict(st.secrets["gcp_service_account"])
@@ -46,24 +46,6 @@ def get_db_connection():
 # This prevents the initial timeout before we even define the client
 
 
-# 2. Extract and format the credentials
-# Note: Use the exact key names as they appear in your TOML
-sa_info = dict(st.secrets["gcp_service_account"])
-credentials = service_account.Credentials.from_service_account_info(sa_info)
-
-# 3. Explicitly construct the BigQuery client
-# Adding the client_options explicitly locks the communication channel
-client = bigquery.Client(
-    credentials=credentials, 
-    project=sa_info["project_id"],
-    client_options={"api_endpoint": "https://bigquery.googleapis.com"}
-)
-# 3. Create the BigQuery Client explicitly
-# This is the "kill switch" for the TransportError
-custom_bq_client = bigquery.Client(
-    credentials=credentials, 
-    project=sa_info.get("project_id", "bi-project-489517")
-)
 
 # --- 1. Define Agent State (The "Memory" of the Graph) ---
 class AgentState(TypedDict):

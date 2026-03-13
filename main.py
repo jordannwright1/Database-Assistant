@@ -1,7 +1,6 @@
 import streamlit as st
 import uuid
 import os
-from agent import app  # Ensure this points to your LangGraph app
 from groq import Groq
 
 # --- 1. Configuration & Setup ---
@@ -25,6 +24,7 @@ for message in st.session_state.messages:
 
 # --- 3. Interaction Loop ---
 if prompt := st.chat_input("Compare the average trip duration of 'Student Membership' users to 'Local365' users for the most recent month in the dataset. Additionally, for each of these two groups, calculate the percentage of their total trips that started during the morning rush hour (7 AM - 9 AM) on weekdays versus all other times."):
+    from agent import app
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
