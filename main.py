@@ -1,8 +1,6 @@
 import streamlit as st
 import uuid
 import os
-os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
-os.environ["GCE_METADATA_HOST"] = "127.0.0.1"
 from groq import Groq
 
 # --- 1. Configuration & Setup ---
