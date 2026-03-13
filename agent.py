@@ -166,7 +166,7 @@ Division Safety: When calculating percentages, always cast the denominator to pr
                                                     "In your final SELECT statement, explicitly ALIAS every column with a simple, unique name (e.g., total_trips, rush_pct). Never leave a column as a raw calculation."
 
                                                     
-                                                    Do NOT hallucinate column names, ONLY use the column names present in {schema}.
+                                                    Do NOT hallucinate column names, ONLY use the column names present in {schema}.  The column, subscriber_id does NOT EXIST in the schema: {schema}.  Do NOT include subscriber_id in your query.
                                                     
 1. CONTRIBUTION METRICS: For "activity" or "share" questions, ALWAYS calculate the percentage based on the Grand Total (SUM), not the Average (AVG).
    - Use a CTE to calculate the total system volume.
