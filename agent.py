@@ -168,7 +168,7 @@ Provide a clear, professional answer. If the result is empty, inform the user th
 
 # --- 4. Nodes (Functions for each step in the graph) ---
 def plan_and_disambiguate(state: AgentState):
-    planner_chain = PLANNER_PROMPT | llm_smart
+    planner_chain = PLANNER_PROMPT | llm
     plan_output = planner_chain.invoke({"question": state["question"]})
     
     if "CLARIFICATION_NEEDED" in plan_output.content:
@@ -181,7 +181,7 @@ import re
 def generate_sql(state: AgentState):
     error = state.get("error")
     # Only allow the LLM to output the SQL code block
-    sql_generator_chain = SQL_GENERATOR_PROMPT | llm_smart
+    sql_generator_chain = SQL_GENERATOR_PROMPT | llm
     
     response = sql_generator_chain.invoke({
         "plan": state["intermediate_steps"][-1].content.replace("PLAN: ", ""),
@@ -275,7 +275,7 @@ def respond_to_user(state: AgentState):
     
     # Execution using the LLM 
     try:
-        final_answer = llm_smart.invoke(prompt).content
+        final_answer = llm.invoke(prompt).content
         return {"final_answer": final_answer}
     except Exception as e:
         return {"final_answer": f"Data retrieved successfully, but I had trouble formatting the summary. Raw Data: {db_result}"}

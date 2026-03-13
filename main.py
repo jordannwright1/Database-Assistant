@@ -24,7 +24,7 @@ for message in st.session_state.messages:
             st.code(message["sql"], language="sql")
 
 # --- 3. Interaction Loop ---
-if prompt := st.chat_input("Ask about bikeshare trends..."):
+if prompt := st.chat_input("Compare the average trip duration of 'Student Membership' users to 'Local365' users for the most recent month in the dataset. Additionally, for each of these two groups, calculate the percentage of their total trips that started during the morning rush hour (7 AM - 9 AM) on weekdays versus all other times."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
