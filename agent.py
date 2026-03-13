@@ -18,13 +18,22 @@ from google.cloud import bigquery
 load_dotenv()
 api_key = os.getenv("MY_API_KEY")
 
-# 1. Access the dictionary directly from secrets
-# This assumes your secrets.toml has the [gcp_service_account] header
-sa_info = dict(st.secrets["gcp_service_account"])
+# 1. Force the Google client to NOT look for the metadata server
+# This prevents the initial timeout before we even define the client
+os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
 
-# 2. Create the credentials object
+# 2. Extract and format the credentials
+# Note: Use the exact key names as they appear in your TOML
+sa_info = dict(st.secrets["gcp_service_account"])
 credentials = service_account.Credentials.from_service_account_info(sa_info)
 
+# 3. Explicitly construct the BigQuery client
+# Adding the client_options explicitly locks the communication channel
+client = bigquery.Client(
+    credentials=credentials, 
+    project=sa_info["project_id"],
+    client_options={"api_endpoint": "https://bigquery.googleapis.com"}
+)
 # 3. Create the BigQuery Client explicitly
 # This is the "kill switch" for the TransportError
 custom_bq_client = bigquery.Client(
