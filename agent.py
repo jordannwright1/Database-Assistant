@@ -1,4 +1,6 @@
 import os
+os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
+os.environ["GCE_METADATA_HOST"] = "127.0.0.1"
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 import streamlit as st
@@ -15,36 +17,31 @@ from langchain_groq import ChatGroq
 
 load_dotenv()
 api_key = os.getenv("MY_API_KEY")
-
 @st.cache_resource
 def get_db_connection():
-    import os
-    # This environment variable tells Google libraries: "Do not use Compute Engine Metadata"
-    os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
-    
     from google.cloud import bigquery
     from google.oauth2 import service_account
     from langchain_community.utilities import SQLDatabase
 
-    try:
-        sa_info = dict(st.secrets["gcp_service_account"])
-        # Explicitly create credentials from the dict
-        credentials = service_account.Credentials.from_service_account_info(sa_info)
-        
-        # Use these explicit credentials to create the client
-        client = bigquery.Client(
-            credentials=credentials, 
-            project=sa_info["project_id"]
-        )
-        
-        return SQLDatabase.from_uri(
-            f"bigquery://{sa_info['project_id']}/austin_bikeshare",
-            engine_args={"connect_args": {"client": client}}
-        )
-    except Exception as e:
-        st.error(f"Connection Error: {e}")
-        return None                
-
+    sa_info = dict(st.secrets["gcp_service_account"])
+    credentials = service_account.Credentials.from_service_account_info(sa_info)
+    
+    # Create the client
+    client = bigquery.Client(
+        credentials=credentials, 
+        project=sa_info["project_id"]
+    )
+    
+    # Pass the 'credentials_info' explicitly to prevent secondary lookup
+    return SQLDatabase.from_uri(
+        f"bigquery://{sa_info['project_id']}/austin_bikeshare",
+        engine_args={
+            "connect_args": {
+                "client": client,
+                "credentials": sa_info 
+            }
+        }
+    )
 
 
 # --- 1. Define Agent State (The "Memory" of the Graph) ---
