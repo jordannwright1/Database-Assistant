@@ -217,7 +217,7 @@ def generate_sql(state: AgentState):
     error = state.get("error")
     # Only allow the LLM to output the SQL code block
     sql_generator_chain = SQL_GENERATOR_PROMPT | llm_smart
-    hardcoded_schema = "Tables: fact_trips (trip_id, start_station_id, end_station_id, duration_minutes, trip_date), dim_stations (station_id, station_name), dim_subscribers (subscriber_id, subscriber_category, subscriber_type)"
+    hardcoded_schema = "Tables: fact_trips (trip_id, start_station_id, end_station_id, duration_minutes, trip_date, start_hour, subscriber_type, bike_id, end_station_id), dim_stations (station_id, station_name, status, location), dim_subscribers (subscriber_category, subscriber_type)"
     response = sql_generator_chain.invoke({
         "plan": state["intermediate_steps"][-1].content.replace("PLAN: ", ""),
         "question": state["question"],
