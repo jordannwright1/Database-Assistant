@@ -1,4 +1,5 @@
 import operator
+os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
 from typing import TypedDict, Annotated, List, Union
 from langchain_openai import ChatOpenAI
 from langchain_community.utilities import SQLDatabase
@@ -14,7 +15,6 @@ from langchain_ollama import ChatOllama
 from langchain_groq import ChatGroq
 from google.oauth2 import service_account
 from google.cloud import bigquery
-os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
 load_dotenv()
 api_key = os.getenv("MY_API_KEY")
 
