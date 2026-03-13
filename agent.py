@@ -147,6 +147,10 @@ GOOD: SELECT * FROM `bi-project-489517.austin_bikeshare.dim_stations`
 
                                                     "When the user doesn't specify a date, calculate metrics for the last 30 days of data available. Use: WHERE trip_date >= DATE_SUB((SELECT MAX(trip_date) FROM fact_trips), INTERVAL 30 DAY)"
 
+                                                    Unit Consistency: Never compare or join columns with different units (e.g., COUNT(*) vs AVG(duration)). If you need to find the "best" in two categories, use two separate CTEs and join them on a common key like trip_year or subscriber_type, not on their values.
+                                                    Avoid Pointless CROSS JOINs: Do not use CROSS JOIN to compare a single maximum value to a list of details unless specifically required for percentage calculations.
+
+Division Safety: When calculating percentages, always cast the denominator to prevent integer division: (COUNT(*) * 100.0 / total_trips).
                                                     "STRICT RULE: Never use AT as a table alias. Use full table names or safe aliases like t1, sub_metrics, etc."
 
                                                     "Constraint: When creating CTEs, ensure every column required for subsequent aggregations is explicitly selected in the prior CTE's SELECT statement."
@@ -161,11 +165,15 @@ GOOD: SELECT * FROM `bi-project-489517.austin_bikeshare.dim_stations`
                                                     "In your final SELECT statement, explicitly ALIAS every column with a simple, unique name (e.g., total_trips, rush_pct). Never leave a column as a raw calculation."
 
                                                     
+                                                    Do NOT hallucinate column names, ONLY use the column names present in {schema}.
+                                                    
 1. CONTRIBUTION METRICS: For "activity" or "share" questions, ALWAYS calculate the percentage based on the Grand Total (SUM), not the Average (AVG).
    - Use a CTE to calculate the total system volume.
    - Use a CROSS JOIN or a second CTE to divide the individual station count by the grand total.
 2. NO ESTIMATION: Never guess, simulate, or provide hypothetical numbers.
-                                                                                                   
+
+                                                    CRITICAL
+                                                    ONLY SELECT the columns you need to answer the question.  Never select all columns for the final SELECT statement.  Only perform JOINs when absolutely necessary.                                                                                                   
 ### CORE CALCULATION POLICY (PRIORITY 1)
 1. NO ESTIMATION: Never guess, simulate, or provide hypothetical numbers. 
 2. SQL-ONLY MATH: All calculations MUST be performed in SQL.  Engineer your own features when necessary to answer the question.
@@ -216,7 +224,7 @@ import re
 def generate_sql(state: AgentState):
     error = state.get("error")
     # Only allow the LLM to output the SQL code block
-    sql_generator_chain = SQL_GENERATOR_PROMPT | llm_smart
+    sql_generator_chain = SQL_GENERATOR_PROMPT | llm
     hardcoded_schema = "Tables: fact_trips (trip_id, start_station_id, end_station_id, duration_minutes, trip_date, start_hour, subscriber_type, bike_id, end_station_id), dim_stations (station_id, station_name, status, location), dim_subscribers (subscriber_category, subscriber_type)"
     response = sql_generator_chain.invoke({
         "plan": state["intermediate_steps"][-1].content.replace("PLAN: ", ""),
@@ -303,6 +311,7 @@ def respond_to_user(state: AgentState):
     1. Answer the user's question: "{state['question']}"
     2. Use a professional, conversational tone.
     3. If percentages or averages are provided in the table, report them exactly as shown. Do not recalculate them unless the math is explicitly requested.
+    4. If a user asks for which year was the highest average trip count, the count for the year with the highest number of rides may be repeated in the results, IGNORE this.  Treat the repeated value as one single value, which you report to the user.
 
     Answer:"""
     
