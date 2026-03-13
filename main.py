@@ -19,6 +19,19 @@ if "messages" not in st.session_state:
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 
+
+import json
+from google.oauth2 import service_account
+
+if "gcp_service_account" in st.secrets:
+    # Convert your Streamlit secret dict back to a format Google understands
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    # Write the credentials to a temporary file OR use the object
+    # The most robust way is to pass the dict directly to the client
+    os.environ["GCP_CREDENTIALS_JSON"] = json.dumps(creds_dict)
+else:
+    st.error("GCP credentials not found in secrets!")
+
 # --- 2. Display History ---
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):

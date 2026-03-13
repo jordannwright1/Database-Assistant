@@ -19,30 +19,41 @@ load_dotenv()
 api_key = os.getenv("MY_API_KEY")
 @st.cache_resource
 def get_db_connection():
-    from google.cloud import bigquery
+    import os
+    import json
     from google.oauth2 import service_account
+    from google.cloud import bigquery
     from langchain_community.utilities import SQLDatabase
-
-    sa_info = dict(st.secrets["gcp_service_account"])
-    credentials = service_account.Credentials.from_service_account_info(sa_info)
     
-    # Create the client
+    # --- 1. Sourcing the Credentials ---
+    if "gcp_service_account" in st.secrets:
+        # PRODUCTION: Get from Streamlit Secrets
+        sa_info = dict(st.secrets["gcp_service_account"])
+        credentials = service_account.Credentials.from_service_account_info(sa_info)
+    else:
+        # LOCAL: Use the JSON file in your repo
+        # Ensure 'GOOGLE_APPLICATION_CREDENTIALS' in your .env points to the filename
+        key_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        credentials = service_account.Credentials.from_service_account_file(key_path)
+        with open(key_path) as f:
+            sa_info = json.load(f)
+
+    # --- 2. Initialize Client with Explicit Universe Domain ---
+    # This is the "kill-switch" for the metadata error
+    from google.api_core import client_options
+    opts = client_options.ClientOptions(universe_domain="googleapis.com")
+
     client = bigquery.Client(
         credentials=credentials, 
-        project=sa_info["project_id"]
-    )
-    
-    # Pass the 'credentials_info' explicitly to prevent secondary lookup
-    return SQLDatabase.from_uri(
-        f"bigquery://{sa_info['project_id']}/austin_bikeshare",
-        engine_args={
-            "connect_args": {
-                "client": client,
-                "credentials": sa_info 
-            }
-        }
+        project=sa_info["project_id"],
+        client_options=opts
     )
 
+    # --- 3. Return the Database Object ---
+    return SQLDatabase.from_uri(
+        f"bigquery://{sa_info['project_id']}/austin_bikeshare",
+        engine_args={"connect_args": {"client": client}}
+    )
 
 # --- 1. Define Agent State (The "Memory" of the Graph) ---
 class AgentState(TypedDict):
