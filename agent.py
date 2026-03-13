@@ -1,6 +1,4 @@
 import os
-os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
-os.environ["GCE_METADATA_HOST"] = "127.0.0.1"
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 import streamlit as st
@@ -22,9 +20,10 @@ api_key = os.getenv("MY_API_KEY")
 def get_db_connection():
     # 1. Force environment variables at the very start of the function
     os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
-    from google.cloud import bigquery
+    os.environ["GCE_METADATA_HOST"] = "127.0.0.1"    
     from google.oauth2 import service_account
     from langchain_community.utilities import SQLDatabase
+    from google.cloud import bigquery
     try:
         sa_info = dict(st.secrets["gcp_service_account"])
         credentials = service_account.Credentials.from_service_account_info(sa_info)
@@ -40,7 +39,6 @@ def get_db_connection():
         client = bigquery.Client(
             credentials=credentials, 
             project=sa_info["project_id"],
-            client_options=opts
         )
         
         return SQLDatabase.from_uri(
