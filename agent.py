@@ -190,12 +190,6 @@ Division Safety: When calculating percentages, always cast the denominator to pr
 3. SOURCE: Prefer vw_trips_detailed unless specific joins are required.
 4. NO DML: Never use INSERT, DELETE, DROP, or ALTER.
 
-### SCHEMA LOCK
-- fact_trips: trip_id, start_station_id, end_station_id, subscriber_id, duration_minutes, start_hour, trip_date.
-- dim_stations: station_id, station_name.
-- dim_subscribers: subscriber_id, subscriber_category.
-- ALWAYS JOIN dim_stations ON start_station_id = station_id.
-- ALWAYS JOIN dim_subscribers ON subscriber_id = subscriber_id.
 
 ---
 Generate only the final SQL query in a ```sql ... ``` block.
