@@ -19,42 +19,31 @@ api_key = os.getenv("MY_API_KEY")
 @st.cache_resource
 def get_db_connection():
     import os
-    # 1. Kill the metadata lookup before it starts
+    # This environment variable tells Google libraries: "Do not use Compute Engine Metadata"
     os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
     
     from google.cloud import bigquery
     from google.oauth2 import service_account
     from langchain_community.utilities import SQLDatabase
-    from google.api_core import client_options
 
     try:
         sa_info = dict(st.secrets["gcp_service_account"])
+        # Explicitly create credentials from the dict
         credentials = service_account.Credentials.from_service_account_info(sa_info)
         
-        # 2. This is the critical part: Explicitly define the universe
-        opts = client_options.ClientOptions(universe_domain="googleapis.com")
-        
-        # 3. Create the client with the options
+        # Use these explicit credentials to create the client
         client = bigquery.Client(
             credentials=credentials, 
-            project=sa_info["project_id"],
-            client_options=opts
+            project=sa_info["project_id"]
         )
         
-        # 4. Pass the client to the SQLAlchemy engine
-        # This prevents SQLAlchemy from trying to create its own default client
         return SQLDatabase.from_uri(
             f"bigquery://{sa_info['project_id']}/austin_bikeshare",
-            engine_args={
-                "connect_args": {
-                    "client": client,
-                }
-            }
+            engine_args={"connect_args": {"client": client}}
         )
     except Exception as e:
-        st.error(f"Cloud Connection Error: {e}")
-        return None
-                
+        st.error(f"Connection Error: {e}")
+        return None                
 
 
 
