@@ -181,7 +181,7 @@ import re
 def generate_sql(state: AgentState):
     error = state.get("error")
     # Only allow the LLM to output the SQL code block
-    sql_generator_chain = SQL_GENERATOR_PROMPT | llm
+    sql_generator_chain = SQL_GENERATOR_PROMPT | llm_smart
     
     response = sql_generator_chain.invoke({
         "plan": state["intermediate_steps"][-1].content.replace("PLAN: ", ""),
