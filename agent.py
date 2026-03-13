@@ -1,3 +1,11 @@
+import os
+os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
+os.environ["GCE_METADATA_HOST"] = "127.0.0.1"
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+import streamlit as st
+from google.oauth2 import service_account
+from google.cloud import bigquery
 import operator
 from typing import TypedDict, Annotated, List, Union
 from langchain_openai import ChatOpenAI
@@ -6,43 +14,44 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.prompts import PromptTemplate
 from langgraph.graph import StateGraph, END
-import streamlit as st
-import os
-from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 from langchain_groq import ChatGroq
-from google.oauth2 import service_account
-from google.cloud import bigquery
+
+
 load_dotenv()
 api_key = os.getenv("MY_API_KEY")
 
 @st.cache_resource
-@st.cache_resource
-@st.cache_resource
 def get_db_connection():
+    # 1. Force environment variables at the very start of the function
     os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
+    
     try:
         sa_info = dict(st.secrets["gcp_service_account"])
         credentials = service_account.Credentials.from_service_account_info(sa_info)
+        
+        # 2. Explicitly define the 'universe_domain'. 
+        # This is the secret sauce that stops the metadata lookup.
+        from google.api_core import client_options
+        opts = client_options.ClientOptions(
+            api_endpoint="https://bigquery.googleapis.com",
+            universe_domain="googleapis.com" # <--- ADD THIS LINE
+        )
+        
         client = bigquery.Client(
             credentials=credentials, 
             project=sa_info["project_id"],
-            client_options={"api_endpoint": "https://bigquery.googleapis.com"}
+            client_options=opts
         )
         
-        # FIX: We use a specific dialect argument to prevent auto-discovery
         return SQLDatabase.from_uri(
             f"bigquery://{sa_info['project_id']}/austin_bikeshare",
-            engine_args={
-                "connect_args": {"client": client},
-                "echo": False # Set to False to stop logs from triggering inspection
-            }
+            engine_args={"connect_args": {"client": client}}
         )
     except Exception as e:
-        st.error(f"Failed to connect: {e}")
+        st.error(f"Cloud Connection Error: {e}")
         return None
-        
+            
 # 1. Force the Google client to NOT look for the metadata server
 # This prevents the initial timeout before we even define the client
 
