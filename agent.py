@@ -147,6 +147,7 @@ GOOD: SELECT * FROM `bi-project-489517.austin_bikeshare.dim_stations`
 
                                                     "When the user doesn't specify a date, calculate metrics for the last 30 days of data available. Use: WHERE trip_date >= DATE_SUB((SELECT MAX(trip_date) FROM fact_trips), INTERVAL 30 DAY)"
 
+                                                    subscriber_id does NOT exist in the dataset.  NEVER include this in your SQL query.
                                                     Unit Consistency: Never compare or join columns with different units (e.g., COUNT(*) vs AVG(duration)). If you need to find the "best" in two categories, use two separate CTEs and join them on a common key like trip_year or subscriber_type, not on their values.
                                                     Avoid Pointless CROSS JOINs: Do not use CROSS JOIN to compare a single maximum value to a list of details unless specifically required for percentage calculations.
 
