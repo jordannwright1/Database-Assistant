@@ -29,13 +29,13 @@ def get_db_connection():
     try:
         sa_info = dict(st.secrets["gcp_service_account"])
         credentials = service_account.Credentials.from_service_account_info(sa_info)
-        
+        print(f"DEBUG: Found credentials for project: {sa_info.get('project_id')}")
         # 2. Explicitly define the 'universe_domain'. 
         # This is the secret sauce that stops the metadata lookup.
         from google.api_core import client_options
         opts = client_options.ClientOptions(
             api_endpoint="https://bigquery.googleapis.com",
-            universe_domain="googleapis.com" # <--- ADD THIS LINE
+            universe_domain="googleapis.com" 
         )
         
         client = bigquery.Client(
