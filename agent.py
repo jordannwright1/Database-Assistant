@@ -12,9 +12,26 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 from langchain_groq import ChatGroq
+from google.oauth2 import service_account
+from google.cloud import bigquery
 
 load_dotenv()
 api_key = os.getenv("MY_API_KEY")
+
+# 1. Access the dictionary directly from secrets
+# This assumes your secrets.toml has the [gcp_service_account] header
+sa_info = dict(st.secrets["gcp_service_account"])
+
+# 2. Create the credentials object
+credentials = service_account.Credentials.from_service_account_info(sa_info)
+
+# 3. Create the BigQuery Client explicitly
+# This is the "kill switch" for the TransportError
+custom_bq_client = bigquery.Client(
+    credentials=credentials, 
+    project=sa_info.get("project_id", "bi-project-489517")
+)
+
 # --- 1. Define Agent State (The "Memory" of the Graph) ---
 class AgentState(TypedDict):
     question: str
@@ -41,8 +58,10 @@ def should_continue(state: AgentState):
 
 # --- 2. Database Connection & Semantic Layer ---
 # Initialize BigQuery connection (read-only service account recommended)
-db = SQLDatabase.from_uri("bigquery://bi-project-489517/austin_bikeshare")
-# llm = ChatOllama(model="llama3", temperature=0)
+db = SQLDatabase.from_uri(
+    "bigquery://bi-project-489517/austin_bikeshare",
+    engine_args={"connect_args": {"client": custom_bq_client}}
+)# llm = ChatOllama(model="llama3", temperature=0)
 # llm = ChatGoogleGenerativeAI(
 #     model="gemini-2.5-flash", temperature=0)
 
