@@ -18,30 +18,31 @@ load_dotenv()
 api_key = os.getenv("MY_API_KEY")
 
 @st.cache_resource
+@st.cache_resource
+@st.cache_resource
 def get_db_connection():
-    """Initializes and caches the database connection."""
     os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
     try:
-        # 1. Get credentials from secrets
         sa_info = dict(st.secrets["gcp_service_account"])
         credentials = service_account.Credentials.from_service_account_info(sa_info)
-        
-        # 2. Explicitly create the BQ client to bypass metadata server
         client = bigquery.Client(
             credentials=credentials, 
-            project=sa_info["project_id"]
+            project=sa_info["project_id"],
+            client_options={"api_endpoint": "https://bigquery.googleapis.com"}
         )
         
-        # 3. Initialize the SQLDatabase
-        db = SQLDatabase.from_uri(
+        # FIX: We use a specific dialect argument to prevent auto-discovery
+        return SQLDatabase.from_uri(
             f"bigquery://{sa_info['project_id']}/austin_bikeshare",
-            engine_args={"connect_args": {"client": client}}
+            engine_args={
+                "connect_args": {"client": client},
+                "echo": False # Set to False to stop logs from triggering inspection
+            }
         )
-        return db
     except Exception as e:
-        st.error(f"Failed to connect to BigQuery: {e}")
+        st.error(f"Failed to connect: {e}")
         return None
-
+        
 # 1. Force the Google client to NOT look for the metadata server
 # This prevents the initial timeout before we even define the client
 
@@ -144,7 +145,13 @@ Error Context: Use {error_context} to modify the original SQL query to resolve t
 
 PROJECT: bi-project-489517
 DATASET: austin_bikeshare
-ALL FROM statements MUST reference the PROJECT and DATASET explicitly, NEVER query just the table name (e.g., fact_trips).  
+                                                    ### CRITICAL RULE: FULLY QUALIFIED NAMES
+- NEVER write "FROM fact_trips" or "JOIN dim_stations".
+- ALWAYS write "FROM `bi-project-489517.austin_bikeshare.fact_trips`".
+- Use backticks (`) around the full project.dataset.table path to prevent parsing errors.
+
+BAD: SELECT * FROM dim_stations
+GOOD: SELECT * FROM `bi-project-489517.austin_bikeshare.dim_stations`
 
                                                     If more information is required, perform JOINS to connect to the dim tables in FIRST SELECT statement and find the information you need to engineer features that calculate the values the user requests in the query.  The first CTE should include all of the necessary JOIN statements to the dim tables (e.g. dim_stations, etc.) needed in order to answer the question {question}.
 
@@ -161,7 +168,14 @@ ALL FROM statements MUST reference the PROJECT and DATASET explicitly, NEVER que
 3. The column aliases MUST NOT contain spaces or special characters (use underscores).
 4. Do not include comments inside the ```sql block.
 
-                                                    "In your final SELECT statement, explicitly ALIAS every column with a simple, unique name (e.g., total_trips, rush_pct). Never leave a column as a raw calculation."                                                
+                                                    "In your final SELECT statement, explicitly ALIAS every column with a simple, unique name (e.g., total_trips, rush_pct). Never leave a column as a raw calculation."
+
+                                                    
+1. CONTRIBUTION METRICS: For "activity" or "share" questions, ALWAYS calculate the percentage based on the Grand Total (SUM), not the Average (AVG).
+   - Use a CTE to calculate the total system volume.
+   - Use a CROSS JOIN or a second CTE to divide the individual station count by the grand total.
+2. NO ESTIMATION: Never guess, simulate, or provide hypothetical numbers.
+                                                                                                   
 ### CORE CALCULATION POLICY (PRIORITY 1)
 1. NO ESTIMATION: Never guess, simulate, or provide hypothetical numbers. 
 2. SQL-ONLY MATH: All calculations MUST be performed in SQL.  Engineer your own features when necessary to answer the question.
@@ -213,12 +227,12 @@ def generate_sql(state: AgentState):
     db = get_db_connection()
     error = state.get("error")
     # Only allow the LLM to output the SQL code block
-    sql_generator_chain = SQL_GENERATOR_PROMPT | llm
-    
+    sql_generator_chain = SQL_GENERATOR_PROMPT | llm_smart
+    hardcoded_schema = "Tables: fact_trips (trip_id, start_station_id, end_station_id, duration_minutes, trip_date), dim_stations (station_id, station_name), dim_subscribers (subscriber_id, subscriber_category, subscriber_type)"
     response = sql_generator_chain.invoke({
         "plan": state["intermediate_steps"][-1].content.replace("PLAN: ", ""),
         "question": state["question"],
-        "schema": db.get_table_info(),
+        "schema": hardcoded_schema,
         "error_context": error or "None"
     }).content
 
@@ -238,26 +252,25 @@ def validate_and_execute_sql(state: AgentState):
     sql_query = state.get("sql_query", "")
     current_attempt = state.get("attempt", 0)
     
+    if not db:
+        return {"error": "Database connection is missing.", "attempt": current_attempt + 1}
+
     try:
-        # 1. Execution
-        raw_result = db.run(sql_query)
+        # 1. Execute via SQLAlchemy engine to get real metadata
+        from sqlalchemy import text
         
-        # Ensure we have a list of tuples/lists
-        if isinstance(raw_result, str):
-            try:
-                raw_result = ast.literal_eval(raw_result)
-            except:
-                pass
-        
-        if not raw_result or raw_result == "[]":
+        with db._engine.connect() as connection:
+            result = connection.execute(text(sql_query))
+            # Extract the actual column names from the cursor
+            headers = list(result.keys())
+            # Fetch all rows
+            raw_result = result.fetchall()
+
+        # 2. Handle empty results
+        if not raw_result:
             return {"db_result": "No data found", "error": None, "attempt": current_attempt}
 
-        headers = re.findall(r"AS\s+([a-zA-Z0-9_]+)", sql_query, re.IGNORECASE)
-        
-        # If extraction fails, fallback to readable placeholders
-        if not headers or len(headers) != len(raw_result[0]):
-            headers = ["membership_type", "avg_duration_min", "total_trips", "rush_trips", "rush_percentage"]
-        # 3. Create Markdown table
+        # 3. Create Markdown table using the real headers from BigQuery
         formatted_table = tabulate(
             raw_result, 
             headers=headers, 
@@ -269,13 +282,12 @@ def validate_and_execute_sql(state: AgentState):
         
     except Exception as e:
         print(f"--- DB ERROR (Attempt {current_attempt + 1}): {str(e)} ---")
-        # Increment the attempt counter to trigger the 2-try limit
         return {
             "error": str(e), 
             "db_result": "ERROR", 
             "attempt": current_attempt + 1 
         }
-    
+        
 
 def respond_to_user(state: AgentState):
     db_result = state.get("db_result")
