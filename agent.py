@@ -14,13 +14,37 @@ from langchain_ollama import ChatOllama
 from langchain_groq import ChatGroq
 from google.oauth2 import service_account
 from google.cloud import bigquery
-
+os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
 load_dotenv()
 api_key = os.getenv("MY_API_KEY")
 
+@st.cache_resource
+def get_db_connection():
+    """Initializes and caches the database connection."""
+    try:
+        # 1. Get credentials from secrets
+        sa_info = dict(st.secrets["gcp_service_account"])
+        credentials = service_account.Credentials.from_service_account_info(sa_info)
+        
+        # 2. Explicitly create the BQ client to bypass metadata server
+        client = bigquery.Client(
+            credentials=credentials, 
+            project=sa_info["project_id"]
+        )
+        
+        # 3. Initialize the SQLDatabase
+        db = SQLDatabase.from_uri(
+            f"bigquery://{sa_info['project_id']}/austin_bikeshare",
+            engine_args={"connect_args": {"client": client}}
+        )
+        return db
+    except Exception as e:
+        st.error(f"Failed to connect to BigQuery: {e}")
+        return None
+
 # 1. Force the Google client to NOT look for the metadata server
 # This prevents the initial timeout before we even define the client
-os.environ["GOOGLE_AUTH_DISABLE_METADATA"] = "1"
+
 
 # 2. Extract and format the credentials
 # Note: Use the exact key names as they appear in your TOML
@@ -65,12 +89,9 @@ def should_continue(state: AgentState):
     return "respond"
 
 
-# --- 2. Database Connection & Semantic Layer ---
-# Initialize BigQuery connection (read-only service account recommended)
-db = SQLDatabase.from_uri(
-    "bigquery://bi-project-489517/austin_bikeshare",
-    engine_args={"connect_args": {"client": custom_bq_client}}
-)# llm = ChatOllama(model="llama3", temperature=0)
+
+
+# llm = ChatOllama(model="llama3", temperature=0)
 # llm = ChatGoogleGenerativeAI(
 #     model="gemini-2.5-flash", temperature=0)
 
@@ -207,6 +228,7 @@ def plan_and_disambiguate(state: AgentState):
 import re
 
 def generate_sql(state: AgentState):
+    db = get_db_connection()
     error = state.get("error")
     # Only allow the LLM to output the SQL code block
     sql_generator_chain = SQL_GENERATOR_PROMPT | llm
@@ -219,7 +241,7 @@ def generate_sql(state: AgentState):
     }).content
 
     # Strict regex to extract only the SQL code block
-    match = re.search(r"```sql\n(.*?)\n```", response, re.DOTALL)
+    match = re.search(r"```sql\s*(.*?)\s*```", response, re.DOTALL)
     sql_query = match.group(1).strip() if match else response.strip()
     
     return {"sql_query": sql_query, "error": None}
@@ -230,6 +252,7 @@ import ast
 from tabulate import tabulate
 
 def validate_and_execute_sql(state: AgentState):
+    db = get_db_connection()
     sql_query = state.get("sql_query", "")
     current_attempt = state.get("attempt", 0)
     
