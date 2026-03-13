@@ -3,8 +3,10 @@ import uuid
 import os
 from groq import Groq
 # --- 1. Configuration & Setup ---
-if "GROQ_API_KEY" in st.secrets:
-    os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
+if "GROQ" in st.secrets:
+    os.environ["GROQ_API_KEY"] = st.secrets["GROQ"]["GROQ_API_KEY"]
+else:
+    st.error("GROQ API key not found in secrets under [GROQ] section!")
 
 st.set_page_config(page_title="Austin Bikeshare AI", page_icon="🚲", layout="wide")
 st.title("🚲 Austin Bikeshare AI Assistant")
