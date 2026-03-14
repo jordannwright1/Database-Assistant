@@ -281,6 +281,9 @@ Good: SAFE_DIVIDE(col, (SELECT t.count FROM cte t))
 Avoid Column Name Conflicts: Do not name a CTE the same as the column within it (e.g., total_trips AS (SELECT COUNT(*) AS total_trips ...)). This causes the SQL engine to return a record type instead of the integer value. Rename the column inside the CTE (e.g., total_val) to avoid this ambiguity.
                                                     
                                                     You NEED to have a GROUP BY statement prior to using ORDER BY.  Without it you will get this error: SELECT list expression references t.total_trips which is neither grouped nor aggregated at [43:7].
+
+
+                                                    If you alias a column in a CTE, it MUST be referenced as the aliased name or it will result in this error: Unrecognized name: trip_date at [49:26] 
 ---
 Generate only the final SQL query in a ```sql ... ``` block.
 Generated SQL:
