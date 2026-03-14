@@ -211,6 +211,40 @@ Window Functions over Subqueries: Encourage the use of Window Functions (e.g., A
 Avoid Cartesian Products: Do not comma-join CTEs (e.g., FROM avg_duration, std_duration) as this can create unintended cross-joins. Use a single stats CTE or a CROSS JOIN.
 
 Limit by Default: If a query is likely to return many rows, append LIMIT 100 unless the user specifies otherwise.
+                                                    
+                                                    When referencing a column that is included in a CTE, you must include the column name in both the CTE AND in your final SELECT statement.  This causes an unrecognized name error in BigQuery.
+
+
+                                                    SQL Result Integrity Rules:
+
+Never create Cartesian Products: When joining tables, you MUST use explicit ON conditions. Never join by simply listing tables in the FROM clause (e.g., FROM table1, table2 is forbidden).
+
+Enforce Aggregation: If the query includes an aggregate function (like COUNT, AVG, SUM), you must include a GROUP BY clause for all non-aggregated columns.
+
+Prevent Row Multiplication: Always verify that the number of rows in your output matches the expected granularity (e.g., one row per station_id). If you see duplicates, add DISTINCT or ensure the GROUP BY is exhaustive.
+
+Limit Row Count: For exploratory queries, always include LIMIT 50 unless the user explicitly requests a full dataset.
+
+                                                    When referencing specific stations, use station_name instead of station_id.
+
+                                                    Strict Aggregation & Windowing Rules:
+
+No Mixed Aggregation Methods: Never combine GROUP BY clauses with Window Functions (OVER(...)) that contain the same column in the PARTITION BY as the GROUP BY.
+
+Window Function Priority: If you need to calculate per-group statistics (like PERCENTILE_CONT or AVG), use Window Functions exclusively. In this case, perform the calculation in a subquery or CTE without a GROUP BY, then use DISTINCT or a final GROUP BY to collapse the rows.
+
+Aggregation Verification: Every column in your SELECT list must be either:
+
+Wrapped in an aggregate function (e.g., SUM(), AVG(), MIN()).
+
+Included explicitly in the GROUP BY clause.
+
+A constant value.
+
+Standardize Statistics: Prefer calculating metrics via OVER(PARTITION BY ...) in a clean CTE, then selecting from that CTE, rather than forcing a GROUP BY on a query that is already performing windowing.  
+
+                                                    Instead of grouping inside the first CTE, keep the rows unique per station using a DISTINCT or perform the window aggregation first, then select the unique rows.                                             
+                                                    You CANNOT query a database for a column it does not have (e.g. total_trips dim_stations).  Create a separate CTE for the column you need to query.
 
 ---
 Generate only the final SQL query in a ```sql ... ``` block.
