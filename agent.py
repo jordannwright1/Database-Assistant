@@ -404,7 +404,7 @@ def respond_to_user(state: AgentState):
         final_answer = llm.invoke(prompt).content
         return {"final_answer": final_answer}
     except Exception as e:
-        return {"final_answer": f"Data retrieved successfully, but I had trouble formatting the summary. Raw Data: {db_result}"}
+        return {"final_answer": f"Data retrieved successfully, but I had trouble formatting the summary. Raw Data: {db_result} Error: {e}"}
     
 
 def decide_next_step(state: AgentState):
