@@ -313,6 +313,33 @@ DON't do this: avg_trip_time AS (SELECT trip_year, ...) (This will fail).
 Example of REQUIRED behavior: avg_trip_time AS (SELECT EXTRACT(YEAR FROM trip_date) AS trip_year, ...) (This will succeed).
 
 Verification: Before finishing a query, verify that every column used in a SELECT, GROUP BY, or JOIN clause is either a raw column from the source table or a new calculation/alias created within that specific block.
+                                                    
+MANDATORY                                            "When using PERCENTILE_CONT, ALWAYS provide TWO ARGUMENTS: the column to aggregate and the percentile fraction (e.g., PERCENTILE_CONT(column, 0.5)).  Providing only ONE argument will result in this error: No matching signature for aggregate function PERCENTILE_CONT Argument types: FLOAT64 Signature: PERCENTILE_CONT(FLOAT64, FLOAT64) Signature requires at least 2 arguments, found 1 argument. Do NOT attempt to use PERCENTILE_CONT as a window function unless explicitly required for row-level calculations; prefer standard GROUP BY aggregation for efficiency."
+                                                    
+
+                                                    "Percentile Function Restrictions: > * Never use ORDER BY inside an OVER() clause when using PERCENTILE_CONT.
+
+
+"SQL Syntax Protocol: Percentile Functions"
+
+Never use ORDER BY inside an OVER() clause for PERCENTILE_CONT.
+
+PERCENTILE_CONT must be used as an aggregate function (e.g., PERCENTILE_CONT(column, 0.5)) combined with a GROUP BY clause, OR as a window function WITHOUT an ORDER BY clause (e.g., PERCENTILE_CONT(column, 0.5) OVER(PARTITION BY category)).
+
+If you need the median per category, use standard GROUP BY aggregation instead of window functions."
+
+                                                    "BigQuery Syntax Restrictions: > * Never use WITHIN GROUP (ORDER BY ...) for percentile calculations.
+
+Always use PERCENTILE_CONT(column, fraction) as a standard aggregate function combined with a GROUP BY clause.
+
+If you need to perform a median calculation, ensure the second argument is the desired percentile (e.g., 0.5 for median)."
+                                                    
+
+                                                    "When using percentile functions in BigQuery, strictly use PERCENTILE_CONT(column, percentile). Never use the WITHIN GROUP (ORDER BY ...) syntax, as it is unsupported in BigQuery."
+
+                                                    
+                                                    BigQuery does not support the WITHIN GROUP syntax for percentile functions. That syntax is common in other databases like PostgreSQL or Oracle, but BigQuery uses a different approach.
+                                                    Performance: GROUP BY is the native way to aggregate data in SQL. It is generally faster and uses less memory than partitioning large windows of data.  PREFER THIS.
 ---
 Generate only the final SQL query in a ```sql ... ``` block.
 Generated SQL:
@@ -341,7 +368,7 @@ import re
 def generate_sql(state: AgentState):
     error = state.get("error")
     # Only allow the LLM to output the SQL code block
-    sql_generator_chain = SQL_GENERATOR_PROMPT | llm
+    sql_generator_chain = SQL_GENERATOR_PROMPT | llm_smart
     hardcoded_schema = "Tables: fact_trips (trip_id, start_station_id, end_station_id, duration_minutes, trip_date, start_hour, subscriber_type, bike_id, end_station_id), dim_stations (station_id, station_name, status, location), dim_subscribers (subscriber_category, subscriber_type)"
     response = sql_generator_chain.invoke({
         "plan": state["intermediate_steps"][-1].content.replace("PLAN: ", ""),
