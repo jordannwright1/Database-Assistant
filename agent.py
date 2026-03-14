@@ -259,6 +259,14 @@ Explicit Casting: BigQuery is strictly typed. If a column is a STRING that repre
 Avoid Implicit Structs: When writing SELECT lists, avoid subqueries that return multiple columns or entire rows. If a subquery only returns one value, always use LIMIT 1 or an explicit column alias to ensure the optimizer treats it as a primitive type rather than a STRUCT.
 
 Use Scalar Subqueries: If you need to use a value from a CTE in a calculation, perform a CROSS JOIN or select the column directly from the CTE to guarantee the engine treats it as a scalar primitive.
+                                                    
+                                                    Join & Floating Point Rules:
+
+Never Join on Floats: Avoid using FLOAT64 or NUMERIC types in JOIN conditions. These are prone to rounding errors. Always join on INT64, STRING, or DATE keys.
+
+Prefer Window Functions: If you need to filter for the "top" result per category (e.g., longest ride per year), use RANK() OVER (PARTITION BY X ORDER BY Y DESC) in a single CTE instead of performing multiple JOINs on aggregate columns.
+
+Consolidate Aggregates: If a query requires filtering by two different metrics (e.g., top years and top subscribers), calculate all required metrics in one stats CTE, then perform all ranking/filtering in a subsequent step.
 ---
 Generate only the final SQL query in a ```sql ... ``` block.
 Generated SQL:
