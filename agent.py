@@ -246,6 +246,19 @@ Standardize Statistics: Prefer calculating metrics via OVER(PARTITION BY ...) in
                                                     Instead of grouping inside the first CTE, keep the rows unique per station using a DISTINCT or perform the window aggregation first, then select the unique rows.                                             
                                                     You CANNOT query a database for a column it does not have (e.g. total_trips dim_stations).  Create a separate CTE for the column you need to query.
 
+                                                    BigQuery Scalar Value & Type Rules:
+
+Extract, Don't Reference: Never reference a CTE or Subquery directly in an arithmetic expression (e.g., (SELECT val FROM cte) - INTERVAL...). You must alias the column and access it via that alias or ensure the subquery returns a single scalar value.
+
+Correct: (SELECT MAX(date_col) FROM table) - INTERVAL 30 DAY
+
+Correct: (SELECT t.max_date FROM my_cte t) - INTERVAL 30 DAY
+
+Explicit Casting: BigQuery is strictly typed. If a column is a STRING that represents a date, you must explicitly cast it: DATE(my_string_column).
+
+Avoid Implicit Structs: When writing SELECT lists, avoid subqueries that return multiple columns or entire rows. If a subquery only returns one value, always use LIMIT 1 or an explicit column alias to ensure the optimizer treats it as a primitive type rather than a STRUCT.
+
+Use Scalar Subqueries: If you need to use a value from a CTE in a calculation, perform a CROSS JOIN or select the column directly from the CTE to guarantee the engine treats it as a scalar primitive.
 ---
 Generate only the final SQL query in a ```sql ... ``` block.
 Generated SQL:
