@@ -143,18 +143,18 @@ DATASET: austin_bikeshare
 BAD: SELECT * FROM dim_stations
 GOOD: SELECT * FROM `bi-project-489517.austin_bikeshare.dim_stations`
 
-                                                    If more information is required, perform JOINS to connect to the dim tables in FIRST SELECT statement and find the information you need to engineer features that calculate the values the user requests in the query.  The first CTE should include all of the necessary JOIN statements to the dim tables (e.g. dim_stations, etc.) needed in order to answer the question {question}.
+                                                    
 
                                                     "When the user doesn't specify a date, calculate metrics for the last 30 days of data available. Use: WHERE trip_date >= DATE_SUB((SELECT MAX(trip_date) FROM fact_trips), INTERVAL 30 DAY)"
 
                                                     subscriber_id does NOT exist in the dataset.  NEVER include this in your SQL query.
-                                                    Unit Consistency: Never compare or join columns with different units (e.g., COUNT(*) vs AVG(duration)). If you need to find the "best" in two categories, use two separate CTEs and join them on a common key like trip_year or subscriber_type, not on their values.
-                                                    Avoid Pointless CROSS JOINs: Do not use CROSS JOIN to compare a single maximum value to a list of details unless specifically required for percentage calculations.
+                                                    
+                                                    
 
 Division Safety: When calculating percentages, always cast the denominator to prevent integer division: (COUNT(*) * 100.0 / total_trips).
                                                     "STRICT RULE: Never use AT as a table alias. Use full table names or safe aliases like t1, sub_metrics, etc."
 
-                                                    "Constraint: When creating CTEs, ensure every column required for subsequent aggregations is explicitly selected in the prior CTE's SELECT statement."
+                                                
 
                                                     ### SQL REQUIREMENTS
 1. Use explicit aliases for every column in the SELECT statement. 
@@ -184,11 +184,6 @@ Division Safety: When calculating percentages, always cast the denominator to pr
    c) CTE 2: Calculate the global average or threshold from CTE 1.
    d) FINAL SELECT: Filter or join the entity metrics against the global average.
 
-### SQL RULES (PRIORITY 2)
-1. RESERVED KEYWORDS: If a column or alias is a reserved keyword (like 'AT'), wrap it in backticks: `AT`.
-2. GROUPING: Always group by ID. Use ANY_VALUE(name_column) for descriptive names in SELECT.
-3. SOURCE: Prefer vw_trips_detailed unless specific joins are required.
-4. NO DML: Never use INSERT, DELETE, DROP, or ALTER.
 
                                                     BigQuery Scalar Subquery Rule:
 When performing arithmetic operations using a value from a Common Table Expression (CTE) or subquery, always ensure the subquery returns a single scalar value of a numeric type (INT64, FLOAT64).
@@ -217,7 +212,6 @@ Limit by Default: If a query is likely to return many rows, append LIMIT 100 unl
 
                                                     SQL Result Integrity Rules:
 
-Never create Cartesian Products: When joining tables, you MUST use explicit ON conditions. Never join by simply listing tables in the FROM clause (e.g., FROM table1, table2 is forbidden).
 
 Enforce Aggregation: If the query includes an aggregate function (like COUNT, AVG, SUM), you must include a GROUP BY clause for all non-aggregated columns.
 
@@ -282,8 +276,43 @@ Avoid Column Name Conflicts: Do not name a CTE the same as the column within it 
                                                     
                                                     When you use ORDER BY you NEED to include the column in a GROUP BY clause or wrap it in an aggregate function (e.g., COUNT()).  Without it you will get this error: SELECT list expression references t.total_trips which is neither grouped nor aggregated at [43:7].
 
+When you alias a column in a CTE, it only lives inside that CTE.  You cannot access the alias in another SELECT statement without explicitly JOINing to the original CTE. However, you should follow best practices which are to calculate the metric and alias it (with the same name) in the same CTE you are SELECTing from. 
+Strict UNION ALL Compliance:
 
-                                                    If you alias a column in a CTE, it MUST be referenced as the aliased name or it will result in this error: Unrecognized name: trip_date at [49:26] 
+Before executing a UNION ALL, verify that both SELECT statements have the exact same number of columns, in the exact same order, and with identical data types.
+
+If you are joining disparate datasets (e.g., Stations vs. Subscribers), cast all columns to a common type (usually STRING or FLOAT64) using CAST(column AS STRING).
+
+Use NULL AS [missing_column_name] as a placeholder if one dataset lacks a field present in the other, ensuring column alignment.
+If top_stations has 6 columns but top_subscriber_types has 5, or if you accidentally swapped the order (e.g., subscriber_type is the 3rd column in one and the 4th in the other), BigQuery will fail with an error—often pointing to the mismatch in the second query.
+
+ALL columns SELECTed in UNION ALL need to exist in the CTE you are querying or JOINed.  If this is not done, the query will fail because the column you are SELECTing for does not exist in that CTE.
+                                                    When you create a subquery, the table only lives within that subquery.  If you have create a CTE and try to SELECT from a table created with a subquery, you will NOT be able to access anything but the aliased name from the subquery.  In a CTE, do NOT attempt to perform a calculation using a column SELECTed for from within a subquery.  In these cases, ALWAYS use the aliased name from the subquery.
+
+NEVER create duplicate CTEs.  Define a CTE ONLY ONCE when writing queries.                                                   
+                                                    EXTRACT does not support literal STRING arguments.  Do not pass literal strings to the EXTRACT function.
+                                                    
+                                                    Avoid UNION ALL if possible.  DON't use UNION ALL unless there are no other alternatives.
+
+                                                    Use station name instead of station id when responding to the user query.                                                
+
+                                                    AT is a RESERVED KEYWORD in BigQuery, NEVER use 'at' at all when generating your queries.  It results in this error: Syntax error: Expected end of input but got keyword AT at [55:17]
+
+
+                                                    CRITICAL SQL MANDATE: Redundant Extraction Protocol
+"When constructing SQL queries involving CTEs, you must adhere to the Redundant Extraction Rule:
+
+Isolation Principle: CTEs are entirely isolated sandboxes. They cannot 'see' aliases created in other CTEs.
+
+No Cross-CTE Aliasing: You are strictly forbidden from referencing an alias defined in one CTE within another CTE.
+
+Mandatory Re-Calculation: Every CTE must be self-contained. If you need a column like trip_year (which requires EXTRACT(YEAR FROM trip_date)), you must perform the full EXTRACT calculation inside the SELECT clause of every single CTE that uses that data.
+
+DON't do this: avg_trip_time AS (SELECT trip_year, ...) (This will fail).
+
+Example of REQUIRED behavior: avg_trip_time AS (SELECT EXTRACT(YEAR FROM trip_date) AS trip_year, ...) (This will succeed).
+
+Verification: Before finishing a query, verify that every column used in a SELECT, GROUP BY, or JOIN clause is either a raw column from the source table or a new calculation/alias created within that specific block.
 ---
 Generate only the final SQL query in a ```sql ... ``` block.
 Generated SQL:
@@ -294,7 +323,7 @@ RESPONSE_GENERATOR_PROMPT = PromptTemplate.from_template("""
 User question: {question}
 Result: {db_result}
 
-Provide a clear, professional answer. If the result is empty, inform the user that no data matches their criteria.  If the user asks an analytical question, do NOT provide a textual explanation or hypothetical calculation.  Only use the information you find from querying the database when formulating your response.  When listing, use a bullet point format.  Return the provided data and report it, (e.g., "Here's the data you asked for"). Contexualize or explain the results only if required to answer the user's question. 
+Provide a clear, professional answer. If the result is empty, inform the user that no data matches their criteria.  If the user asks an analytical question, do NOT provide a textual explanation or hypothetical calculation.  Only use the information you find from querying the database when formulating your response.  When listing, use a bullet point format.  Return the provided data and report it, (e.g., "Here's the data you asked for"). Contexualize or explain the results only if required to answer the user's question. Do not provide code blocks.
 """)
 
 # --- 4. Nodes (Functions for each step in the graph) ---
@@ -324,8 +353,11 @@ def generate_sql(state: AgentState):
     # Strict regex to extract only the SQL code block
     match = re.search(r"```sql\s*(.*?)\s*```", response, re.DOTALL)
     sql_query = match.group(1).strip() if match else response.strip()
-    
-    return {"sql_query": sql_query, "error": None}
+    try:
+        return {"sql_query": sql_query, "error": None}
+    except Exception as e:
+        print(f"--- SQL ERROR: {str(e)} ---")
+        return {"sql_query": None, "error": str(e)}
 
 
 
@@ -400,6 +432,7 @@ def respond_to_user(state: AgentState):
     2. Use a professional, conversational tone.
     3. If percentages or averages are provided in the table, report them exactly as shown. Do not recalculate them unless the math is explicitly requested.
     4. If a user asks for which year was the highest average trip count, the count for the year with the highest number of rides may be repeated in the results, IGNORE this.  Treat the repeated value as one single value, which you report to the user.
+    5. When reporting, round to the second decimal place.
     5. Take your time to analyze the data and provide a clear and concise response to the user.
 
     Answer:"""
