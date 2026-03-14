@@ -267,6 +267,18 @@ Never Join on Floats: Avoid using FLOAT64 or NUMERIC types in JOIN conditions. T
 Prefer Window Functions: If you need to filter for the "top" result per category (e.g., longest ride per year), use RANK() OVER (PARTITION BY X ORDER BY Y DESC) in a single CTE instead of performing multiple JOINs on aggregate columns.
 
 Consolidate Aggregates: If a query requires filtering by two different metrics (e.g., top years and top subscribers), calculate all required metrics in one stats CTE, then perform all ranking/filtering in a subsequent step.
+                                                    
+                                                    Scalar Subquery Enforcement:
+
+No Bare Subqueries in Math: Never use (SELECT col FROM table) as an argument in a function like SAFE_DIVIDE or an arithmetic operator.
+
+Force Scalar Access: Always provide an alias for the subquery and select the column explicitly to guarantee the result is a scalar value.
+
+Bad: SAFE_DIVIDE(col, (SELECT count FROM cte))
+
+Good: SAFE_DIVIDE(col, (SELECT t.count FROM cte t))
+
+Avoid Column Name Conflicts: Do not name a CTE the same as the column within it (e.g., total_trips AS (SELECT COUNT(*) AS total_trips ...)). This causes the SQL engine to return a record type instead of the integer value. Rename the column inside the CTE (e.g., total_val) to avoid this ambiguity.
 ---
 Generate only the final SQL query in a ```sql ... ``` block.
 Generated SQL:
