@@ -294,7 +294,7 @@ NEVER create duplicate CTEs.  Define a CTE ONLY ONCE when writing queries.
                                                     
                                                     Avoid UNION ALL if possible.  DON't use UNION ALL unless there are no other alternatives.
 
-                                                    Use station name instead of station id when responding to the user query.                                                
+                                                    Use station_name instead of station_id when responding to a user query asking about specific stations.                                                
 
                                                     AT is a RESERVED KEYWORD in BigQuery, NEVER use 'at' at all when generating your queries.  It results in this error: Syntax error: Expected end of input but got keyword AT at [55:17]
 
