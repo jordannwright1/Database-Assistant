@@ -460,7 +460,8 @@ def respond_to_user(state: AgentState):
     3. If percentages or averages are provided in the table, report them exactly as shown. Do not recalculate them unless the math is explicitly requested.
     4. If a user asks for which year was the highest average trip count, the count for the year with the highest number of rides may be repeated in the results, IGNORE this.  Treat the repeated value as one single value, which you report to the user.
     5. When reporting, round to the second decimal place.
-    6. Take your time to analyze the data and provide a clear and concise response to the user.
+    6. All of the calculations and filters have been done in SQL, so what you receive is the final result.  
+    7. Take your time to analyze the data and provide a clear and concise response to the user.
 
     Answer:"""
     
